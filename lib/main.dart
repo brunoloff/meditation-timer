@@ -13,9 +13,11 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
 part 'timer_data.dart';
+part 'pranayama_data.dart';
 part 'background_timer_service.dart';
 part 'main_screen.dart';
 part 'tabs.dart';
+part 'pranayama_tab.dart';
 part 'edit_timer_screen.dart';
 part 'select_sound_screen.dart';
 part 'meditation_screen.dart';

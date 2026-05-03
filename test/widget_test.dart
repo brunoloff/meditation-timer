@@ -20,6 +20,7 @@ void main() {
 
     expect(find.text('Breath and Insight Timer'), findsNothing);
     expect(find.text('Timers'), findsWidgets);
+    expect(find.text('Pranayama'), findsOneWidget);
     expect(find.text('Stats'), findsWidgets);
     expect(find.byIcon(Icons.settings_outlined), findsOneWidget);
     expect(find.text('Recent timers'), findsOneWidget);
@@ -67,6 +68,81 @@ void main() {
     expect(find.byKey(const ValueKey('import-logs-button')), findsOneWidget);
     expect(find.byKey(const ValueKey('export-logs-button')), findsOneWidget);
     expect(find.byKey(const ValueKey('purge-logs-button')), findsOneWidget);
+  });
+
+  testWidgets('pranayama tab can run presets inline and edit the list', (
+    WidgetTester tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(800, 1100));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    await tester.pumpWidget(const BreathAndInsightTimerApp());
+    await tester.pump();
+
+    await tester.tap(find.byKey(const ValueKey('pranayama-tab-button')));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('pranayama-tab')), findsOneWidget);
+    expect(find.text('Recent presets'), findsOneWidget);
+    expect(find.text('No recent presets yet'), findsOneWidget);
+    expect(find.text('Presets'), findsOneWidget);
+    expect(find.text('6 in 8 out'), findsWidgets);
+    expect(find.text('Balancing'), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('pranayama-6 in 8 out-root')));
+    await tester.pump();
+
+    expect(find.text('Inhale'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('toggle-pranayama-button')),
+      findsOneWidget,
+    );
+    expect(find.byKey(const ValueKey('stop-pranayama-button')), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('timers-tab-button')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('pranayama-tab')), findsNothing);
+
+    await tester.tap(find.byKey(const ValueKey('pranayama-tab-button')));
+    await tester.pumpAndSettle();
+    expect(find.text('Inhale'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('pranayama-6 in 8 out-recent')),
+      findsOneWidget,
+    );
+
+    await tester.tap(
+      find.byKey(const ValueKey('edit-pranayama-positions-button')),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('editable-pranayama-browser')),
+      findsOneWidget,
+    );
+
+    await tester.tap(find.byKey(const ValueKey('add-pranayama-preset-button')));
+    await tester.pumpAndSettle();
+    expect(find.text('Create new preset'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('pranayama-in-breath-field')),
+      findsOneWidget,
+    );
+
+    await tester.tap(find.byKey(const ValueKey('cancel-timer-edit-button')));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const ValueKey('add-pranayama-folder-button')));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const ValueKey('pranayama-folder-title-field')),
+      'Breath work',
+    );
+    await tester.tap(
+      find.byKey(const ValueKey('save-pranayama-folder-title-button')),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Breath work'), findsOneWidget);
   });
 
   testWidgets('sound setting can be disabled and is remembered', (

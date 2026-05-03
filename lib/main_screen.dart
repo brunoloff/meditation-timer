@@ -12,19 +12,32 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   HomeTab _selectedTab = HomeTab.timers;
   bool _recentTimersCollapsed = false;
+  bool _recentPranayamaCollapsed = false;
   bool _soundEnabled = true;
   bool _turnScreenOnNearAudio = true;
   bool _isEditingTimerPositions = false;
+  bool _isEditingPranayamaPositions = false;
   int _recentTimerLimit = _defaultRecentTimerLimit;
   AudioPlayer? _settingsAudioPlayer;
   final MeditationLogStore _logStore = const MeditationLogStore();
   final BackgroundTimerService _backgroundTimerService =
       const BackgroundTimerService();
   final Set<String> _expandedFolders = <String>{};
+  final Set<String> _expandedPranayamaFolders = <String>{};
   final List<TimerBrowserEntry> _timerEntries = List.of(_defaultTimerEntries);
+  final List<PranayamaBrowserEntry> _pranayamaEntries = List.of(
+    _defaultPranayamaEntries,
+  );
   final List<String> _recentTimerIds = <String>[];
+  final List<String> _recentPranayamaPresetIds = <String>[];
   int _timerEntriesSaveGeneration = 0;
+  int _pranayamaEntriesSaveGeneration = 0;
   int _statsRefreshKey = 0;
+  PranayamaPreset? _activePranayamaPreset;
+  DateTime? _pranayamaStartedAt;
+  Duration _pranayamaElapsedBeforePause = Duration.zero;
+  bool _isPranayamaPaused = false;
+  Timer? _pranayamaTicker;
 
   @override
   void initState() {
@@ -34,6 +47,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   void dispose() {
+    _pranayamaTicker?.cancel();
     _settingsAudioPlayer?.dispose();
     super.dispose();
   }
@@ -48,6 +62,8 @@ class _HomeScreenState extends State<HomeScreen> {
     setState(() {
       _recentTimersCollapsed =
           preferences.getBool(_recentTimersCollapsedKey) ?? false;
+      _recentPranayamaCollapsed =
+          preferences.getBool(_recentPranayamaCollapsedKey) ?? false;
       _soundEnabled = preferences.getBool(_soundEnabledKey) ?? true;
       _turnScreenOnNearAudio =
           preferences.getBool(_turnScreenOnNearAudioKey) ?? true;
@@ -59,11 +75,26 @@ class _HomeScreenState extends State<HomeScreen> {
         ..addAll(
           _decodeRecentTimerIds(preferences.getString(_recentTimerIdsKey)),
         );
+      _recentPranayamaPresetIds
+        ..clear()
+        ..addAll(
+          _decodeRecentTimerIds(
+            preferences.getString(_recentPranayamaPresetIdsKey),
+          ),
+        );
       _timerEntries
         ..clear()
         ..addAll(
           _decodeTimerEntries(preferences.getString(_timerEntriesKey)) ??
               _defaultTimerEntries,
+        );
+      _pranayamaEntries
+        ..clear()
+        ..addAll(
+          _decodePranayamaEntries(
+                preferences.getString(_pranayamaEntriesKey),
+              ) ??
+              _defaultPranayamaEntries,
         );
     });
   }
@@ -82,6 +113,16 @@ class _HomeScreenState extends State<HomeScreen> {
 
     final preferences = await SharedPreferences.getInstance();
     await preferences.setBool(_recentTimersCollapsedKey, nextValue);
+  }
+
+  Future<void> _toggleRecentPranayamaPresets() async {
+    final nextValue = !_recentPranayamaCollapsed;
+    setState(() {
+      _recentPranayamaCollapsed = nextValue;
+    });
+
+    final preferences = await SharedPreferences.getInstance();
+    await preferences.setBool(_recentPranayamaCollapsedKey, nextValue);
   }
 
   Future<void> _setSoundEnabled({required bool enabled}) async {
@@ -270,9 +311,25 @@ class _HomeScreenState extends State<HomeScreen> {
     });
   }
 
+  void _togglePranayamaFolder(String folderName) {
+    setState(() {
+      if (_expandedPranayamaFolders.contains(folderName)) {
+        _expandedPranayamaFolders.remove(folderName);
+      } else {
+        _expandedPranayamaFolders.add(folderName);
+      }
+    });
+  }
+
   void _toggleTimerPositionEditing() {
     setState(() {
       _isEditingTimerPositions = !_isEditingTimerPositions;
+    });
+  }
+
+  void _togglePranayamaPositionEditing() {
+    setState(() {
+      _isEditingPranayamaPositions = !_isEditingPranayamaPositions;
     });
   }
 
@@ -632,6 +689,451 @@ class _HomeScreenState extends State<HomeScreen> {
     ];
   }
 
+  Future<void> _addPranayamaFolder() async {
+    final folderName = await _promptForPranayamaFolderTitle(
+      title: 'Add folder',
+      initialValue: 'New folder',
+      saveButtonLabel: 'Add',
+    );
+    if (folderName == null) {
+      return;
+    }
+
+    setState(() {
+      _pranayamaEntries.add(
+        PranayamaFolderEntry(
+          PranayamaFolder(name: folderName, presets: const []),
+        ),
+      );
+    });
+
+    unawaited(_savePranayamaEntries());
+  }
+
+  Future<void> _editPranayamaFolderTitle(PranayamaFolder folder) async {
+    final newName = await _promptForPranayamaFolderTitle(
+      title: 'Edit folder title',
+      initialValue: folder.name,
+      saveButtonLabel: 'Save',
+      exceptFolderName: folder.name,
+    );
+
+    if (newName == null || newName == folder.name) {
+      return;
+    }
+
+    setState(() {
+      for (var index = 0; index < _pranayamaEntries.length; index += 1) {
+        final entry = _pranayamaEntries[index];
+        if (entry is PranayamaFolderEntry && entry.folder.name == folder.name) {
+          _pranayamaEntries[index] = PranayamaFolderEntry(
+            entry.folder.withName(newName),
+          );
+          break;
+        }
+      }
+
+      if (_expandedPranayamaFolders.remove(folder.name)) {
+        _expandedPranayamaFolders.add(newName);
+      }
+    });
+
+    unawaited(_savePranayamaEntries());
+  }
+
+  Future<String?> _promptForPranayamaFolderTitle({
+    required String title,
+    required String initialValue,
+    required String saveButtonLabel,
+    String? exceptFolderName,
+  }) async {
+    var editedName = initialValue;
+    final newName = await showDialog<String>(
+      context: context,
+      builder: (context) {
+        String? errorText;
+
+        void submit(StateSetter setDialogState) {
+          final trimmedName = editedName.trim();
+          if (trimmedName.isEmpty) {
+            setDialogState(() {
+              errorText = 'Enter a folder title';
+            });
+            return;
+          }
+
+          if (_pranayamaFolderNameExists(
+            trimmedName,
+            exceptFolderName: exceptFolderName,
+          )) {
+            setDialogState(() {
+              errorText = 'A folder with this title already exists';
+            });
+            return;
+          }
+
+          Navigator.of(context).pop(trimmedName);
+        }
+
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              backgroundColor: _homeSurfaceColor,
+              title: Text(title),
+              content: TextFormField(
+                key: const ValueKey('pranayama-folder-title-field'),
+                initialValue: initialValue,
+                autofocus: true,
+                decoration: InputDecoration(
+                  labelText: 'Title',
+                  errorText: errorText,
+                ),
+                textInputAction: TextInputAction.done,
+                onChanged: (value) {
+                  editedName = value;
+                  if (errorText != null) {
+                    setDialogState(() {
+                      errorText = null;
+                    });
+                  }
+                },
+                onFieldSubmitted: (_) => submit(setDialogState),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  child: const Text('Cancel'),
+                ),
+                TextButton(
+                  key: const ValueKey('save-pranayama-folder-title-button'),
+                  onPressed: () => submit(setDialogState),
+                  child: Text(saveButtonLabel),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    return newName;
+  }
+
+  bool _pranayamaFolderNameExists(
+    String folderName, {
+    String? exceptFolderName,
+  }) {
+    return _pranayamaEntries.any(
+      (entry) =>
+          entry is PranayamaFolderEntry &&
+          entry.folder.name == folderName &&
+          entry.folder.name != exceptFolderName,
+    );
+  }
+
+  void _deletePranayamaFolder(PranayamaFolder folder) {
+    if (folder.presets.isNotEmpty) {
+      return;
+    }
+
+    setState(() {
+      for (var index = 0; index < _pranayamaEntries.length; index += 1) {
+        final entry = _pranayamaEntries[index];
+        if (entry is PranayamaFolderEntry && entry.folder.name == folder.name) {
+          _pranayamaEntries.removeAt(index);
+          break;
+        }
+      }
+
+      _expandedPranayamaFolders.remove(folder.name);
+    });
+
+    unawaited(_savePranayamaEntries());
+  }
+
+  Future<void> _createPranayamaPreset() async {
+    final preset = await Navigator.of(context).push<PranayamaPreset>(
+      MaterialPageRoute(
+        builder: (_) =>
+            PranayamaEditScreen(existingPresetNames: _pranayamaPresetNames()),
+      ),
+    );
+
+    if (preset == null) {
+      return;
+    }
+
+    setState(() {
+      _pranayamaEntries.add(PranayamaPresetEntry(preset));
+    });
+
+    unawaited(_savePranayamaEntries());
+  }
+
+  Future<void> _editPranayamaPreset(PranayamaPreset preset) async {
+    final updatedPreset = await Navigator.of(context).push<PranayamaPreset>(
+      MaterialPageRoute(
+        builder: (_) => PranayamaEditScreen(
+          preset: preset,
+          existingPresetNames: _pranayamaPresetNames(
+            exceptPresetName: preset.name,
+          ),
+        ),
+      ),
+    );
+
+    if (updatedPreset == null) {
+      return;
+    }
+
+    final updatedEntries = _replacePranayamaPreset(
+      _pranayamaEntries,
+      preset.name,
+      updatedPreset,
+    );
+    setState(() {
+      _pranayamaEntries
+        ..clear()
+        ..addAll(updatedEntries);
+      if (_activePranayamaPreset?.id == updatedPreset.id) {
+        _activePranayamaPreset = updatedPreset;
+      }
+    });
+
+    unawaited(_savePranayamaEntries());
+    unawaited(_saveRecentPranayamaPresetIds());
+  }
+
+  Future<void> _confirmDeletePranayamaPreset(PranayamaPreset preset) async {
+    final shouldDelete = await showDialog<bool>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          backgroundColor: _homeSurfaceColor,
+          title: const Text('Delete preset?'),
+          content: Text('Delete "${preset.name}"? This cannot be undone.'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              key: const ValueKey('confirm-delete-pranayama-preset-button'),
+              onPressed: () => Navigator.of(context).pop(true),
+              style: TextButton.styleFrom(
+                foregroundColor: const Color(0xFFE06A6A),
+              ),
+              child: const Text('Delete'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (shouldDelete != true) {
+      return;
+    }
+
+    final updatedEntries = _removePranayamaPreset(
+      _pranayamaEntries,
+      preset.name,
+    );
+    setState(() {
+      _pranayamaEntries
+        ..clear()
+        ..addAll(updatedEntries);
+      _recentPranayamaPresetIds.remove(preset.id);
+      if (_activePranayamaPreset?.id == preset.id) {
+        _stopPranayamaSession(updateState: false);
+      }
+    });
+
+    unawaited(_savePranayamaEntries());
+    unawaited(_saveRecentPranayamaPresetIds());
+  }
+
+  Set<String> _pranayamaPresetNames({String? exceptPresetName}) {
+    final names = <String>{};
+    for (final entry in _pranayamaEntries) {
+      switch (entry) {
+        case PranayamaPresetEntry(:final preset):
+          if (preset.name != exceptPresetName) {
+            names.add(preset.name);
+          }
+        case PranayamaFolderEntry(:final folder):
+          for (final preset in folder.presets) {
+            if (preset.name != exceptPresetName) {
+              names.add(preset.name);
+            }
+          }
+      }
+    }
+
+    return names;
+  }
+
+  void _reorderPranayamaEntry(int oldIndex, int newIndex) {
+    setState(() {
+      if (newIndex > oldIndex) {
+        newIndex -= 1;
+      }
+
+      final rows = _editablePranayamaRowsFor(_pranayamaEntries);
+      final movingRow = rows[oldIndex];
+      final entriesWithoutMoving = _removeEditablePranayamaRow(
+        _pranayamaEntries,
+        movingRow,
+      );
+      final rowsWithoutMoving = _editablePranayamaRowsFor(entriesWithoutMoving);
+      final targetIndex = newIndex.clamp(0, rowsWithoutMoving.length);
+
+      _pranayamaEntries
+        ..clear()
+        ..addAll(switch (movingRow) {
+          _EditablePranayamaPresetRow(:final preset) =>
+            _insertPranayamaPresetRow(
+              entriesWithoutMoving,
+              rowsWithoutMoving,
+              targetIndex,
+              preset,
+            ),
+          _EditablePranayamaFolderRow(:final folder) =>
+            _insertPranayamaFolderRow(
+              entriesWithoutMoving,
+              rowsWithoutMoving,
+              targetIndex,
+              folder,
+            ),
+        });
+    });
+
+    unawaited(_savePranayamaEntries());
+  }
+
+  Future<void> _savePranayamaEntries() async {
+    final saveGeneration = ++_pranayamaEntriesSaveGeneration;
+    final encodedEntries = jsonEncode(
+      _encodePranayamaEntries(_pranayamaEntries),
+    );
+    final preferences = await SharedPreferences.getInstance();
+
+    if (saveGeneration != _pranayamaEntriesSaveGeneration) {
+      return;
+    }
+
+    await preferences.setString(_pranayamaEntriesKey, encodedEntries);
+  }
+
+  void _startPranayamaPreset(PranayamaPreset preset) {
+    _recordRecentPranayamaPreset(preset);
+    setState(() {
+      _activePranayamaPreset = preset;
+      _pranayamaStartedAt = DateTime.now();
+      _pranayamaElapsedBeforePause = Duration.zero;
+      _isPranayamaPaused = false;
+    });
+    _ensurePranayamaTicker();
+  }
+
+  void _togglePranayamaPaused() {
+    final preset = _activePranayamaPreset;
+    if (preset == null) {
+      return;
+    }
+
+    setState(() {
+      if (_isPranayamaPaused) {
+        _pranayamaStartedAt = DateTime.now();
+        _isPranayamaPaused = false;
+        _ensurePranayamaTicker();
+      } else {
+        _pranayamaElapsedBeforePause = _currentPranayamaElapsed;
+        _pranayamaStartedAt = null;
+        _isPranayamaPaused = true;
+      }
+    });
+  }
+
+  void _stopPranayamaSession({bool updateState = true}) {
+    _pranayamaTicker?.cancel();
+    _pranayamaTicker = null;
+
+    void clearSession() {
+      _activePranayamaPreset = null;
+      _pranayamaStartedAt = null;
+      _pranayamaElapsedBeforePause = Duration.zero;
+      _isPranayamaPaused = false;
+    }
+
+    if (updateState) {
+      setState(clearSession);
+    } else {
+      clearSession();
+    }
+  }
+
+  void _ensurePranayamaTicker() {
+    _pranayamaTicker ??= Timer.periodic(const Duration(milliseconds: 250), (_) {
+      if (!mounted) {
+        return;
+      }
+
+      final preset = _activePranayamaPreset;
+      if (preset == null || _isPranayamaPaused) {
+        return;
+      }
+
+      final elapsed = _currentPranayamaElapsed;
+      if (preset.duration != null && elapsed >= preset.duration!) {
+        _stopPranayamaSession();
+        return;
+      }
+
+      setState(() {});
+    });
+  }
+
+  Duration get _currentPranayamaElapsed {
+    if (_isPranayamaPaused || _pranayamaStartedAt == null) {
+      return _pranayamaElapsedBeforePause;
+    }
+
+    return _pranayamaElapsedBeforePause +
+        DateTime.now().difference(_pranayamaStartedAt!);
+  }
+
+  void _recordRecentPranayamaPreset(PranayamaPreset preset) {
+    setState(() {
+      _recentPranayamaPresetIds.remove(preset.id);
+      if (_recentTimerLimit > 0) {
+        _recentPranayamaPresetIds.insert(0, preset.id);
+      }
+      if (_recentPranayamaPresetIds.length > _recentTimerLimit) {
+        _recentPranayamaPresetIds.removeRange(
+          _recentTimerLimit,
+          _recentPranayamaPresetIds.length,
+        );
+      }
+    });
+
+    unawaited(_saveRecentPranayamaPresetIds());
+  }
+
+  Future<void> _saveRecentPranayamaPresetIds() async {
+    final preferences = await SharedPreferences.getInstance();
+    await preferences.setString(
+      _recentPranayamaPresetIdsKey,
+      jsonEncode(_recentPranayamaPresetIds),
+    );
+  }
+
+  List<PranayamaPreset> get _recentPranayamaPresets {
+    return [
+      for (final presetId in _recentPranayamaPresetIds)
+        ?_pranayamaPresetByIdInEntries(presetId, _pranayamaEntries),
+    ];
+  }
+
   Future<void> _openLogs() async {
     await Navigator.of(
       context,
@@ -669,49 +1171,72 @@ class _HomeScreenState extends State<HomeScreen> {
                 color: _homeSurfaceColor,
                 child: Padding(
                   padding: const EdgeInsets.fromLTRB(24, 24, 24, 48),
-                  child: _selectedTab == HomeTab.timers
-                      ? _TimersTab(
-                          recentTimersCollapsed: _recentTimersCollapsed,
-                          recentTimers: _recentTimers,
-                          isEditingTimerPositions: _isEditingTimerPositions,
-                          expandedFolders: _expandedFolders,
-                          timerEntries: _timerEntries,
-                          onToggleRecentTimers: _toggleRecentTimers,
-                          onAddTimer: _createTimer,
-                          onAddFolder: _addFolder,
-                          onToggleTimerPositionEditing:
-                              _toggleTimerPositionEditing,
-                          onEditTimer: _editTimer,
-                          onDeleteTimer: _confirmDeleteTimer,
-                          onEditFolderTitle: _editFolderTitle,
-                          onDeleteFolder: _deleteFolder,
-                          onToggleFolder: _toggleFolder,
-                          onReorderTimerEntry: _reorderTimerEntry,
-                          onStartTimer: _startTimer,
-                        )
-                      : _selectedTab == HomeTab.stats
-                      ? _StatsTab(
-                          logStore: _logStore,
-                          refreshKey: _statsRefreshKey,
-                          onViewEditLogs: _openLogs,
-                        )
-                      : _SettingsTab(
-                          soundEnabled: _soundEnabled,
-                          turnScreenOnNearAudio: _turnScreenOnNearAudio,
-                          recentTimerLimit: _recentTimerLimit,
-                          onSoundEnabledChanged: (enabled) =>
-                              _setSoundEnabled(enabled: enabled),
-                          onTurnScreenOnNearAudioChanged: (enabled) =>
-                              _setTurnScreenOnNearAudio(enabled: enabled),
-                          onRecentTimerLimitChanged: _setRecentTimerLimit,
-                          onTestSound: _testSound,
-                          onPrepareBackgroundTimerSupport:
-                              _prepareBackgroundTimerSupport,
-                          onOpenBackgroundSetupGuide: _openBackgroundSetupHelp,
-                          onImportLogs: _importLogsCsv,
-                          onExportLogs: _exportLogsCsv,
-                          onPurgeLogs: _confirmPurgeLogs,
-                        ),
+                  child: switch (_selectedTab) {
+                    HomeTab.timers => _TimersTab(
+                      recentTimersCollapsed: _recentTimersCollapsed,
+                      recentTimers: _recentTimers,
+                      isEditingTimerPositions: _isEditingTimerPositions,
+                      expandedFolders: _expandedFolders,
+                      timerEntries: _timerEntries,
+                      onToggleRecentTimers: _toggleRecentTimers,
+                      onAddTimer: _createTimer,
+                      onAddFolder: _addFolder,
+                      onToggleTimerPositionEditing: _toggleTimerPositionEditing,
+                      onEditTimer: _editTimer,
+                      onDeleteTimer: _confirmDeleteTimer,
+                      onEditFolderTitle: _editFolderTitle,
+                      onDeleteFolder: _deleteFolder,
+                      onToggleFolder: _toggleFolder,
+                      onReorderTimerEntry: _reorderTimerEntry,
+                      onStartTimer: _startTimer,
+                    ),
+                    HomeTab.pranayama => _PranayamaTab(
+                      recentPresetsCollapsed: _recentPranayamaCollapsed,
+                      recentPresets: _recentPranayamaPresets,
+                      isEditingPresetPositions: _isEditingPranayamaPositions,
+                      expandedFolders: _expandedPranayamaFolders,
+                      presetEntries: _pranayamaEntries,
+                      activePreset: _activePranayamaPreset,
+                      elapsed: _currentPranayamaElapsed,
+                      isPaused: _isPranayamaPaused,
+                      onToggleRecentPresets: _toggleRecentPranayamaPresets,
+                      onAddPreset: _createPranayamaPreset,
+                      onAddFolder: _addPranayamaFolder,
+                      onTogglePresetPositionEditing:
+                          _togglePranayamaPositionEditing,
+                      onEditPreset: _editPranayamaPreset,
+                      onDeletePreset: _confirmDeletePranayamaPreset,
+                      onEditFolderTitle: _editPranayamaFolderTitle,
+                      onDeleteFolder: _deletePranayamaFolder,
+                      onToggleFolder: _togglePranayamaFolder,
+                      onReorderPresetEntry: _reorderPranayamaEntry,
+                      onStartPreset: _startPranayamaPreset,
+                      onTogglePause: _togglePranayamaPaused,
+                      onStop: _stopPranayamaSession,
+                    ),
+                    HomeTab.stats => _StatsTab(
+                      logStore: _logStore,
+                      refreshKey: _statsRefreshKey,
+                      onViewEditLogs: _openLogs,
+                    ),
+                    HomeTab.settings => _SettingsTab(
+                      soundEnabled: _soundEnabled,
+                      turnScreenOnNearAudio: _turnScreenOnNearAudio,
+                      recentTimerLimit: _recentTimerLimit,
+                      onSoundEnabledChanged: (enabled) =>
+                          _setSoundEnabled(enabled: enabled),
+                      onTurnScreenOnNearAudioChanged: (enabled) =>
+                          _setTurnScreenOnNearAudio(enabled: enabled),
+                      onRecentTimerLimitChanged: _setRecentTimerLimit,
+                      onTestSound: _testSound,
+                      onPrepareBackgroundTimerSupport:
+                          _prepareBackgroundTimerSupport,
+                      onOpenBackgroundSetupGuide: _openBackgroundSetupHelp,
+                      onImportLogs: _importLogsCsv,
+                      onExportLogs: _exportLogsCsv,
+                      onPurgeLogs: _confirmPurgeLogs,
+                    ),
+                  },
                 ),
               ),
             ),
@@ -780,7 +1305,7 @@ class _HomeTabBar extends StatelessWidget {
   Widget build(BuildContext context) {
     return Row(
       children: [
-        for (final tab in [HomeTab.timers, HomeTab.stats])
+        for (final tab in [HomeTab.timers, HomeTab.pranayama, HomeTab.stats])
           Expanded(
             child: _HomeTextTabButton(
               tab: tab,

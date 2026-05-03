@@ -2,6 +2,7 @@ part of 'main.dart';
 
 enum HomeTab {
   timers('Timers'),
+  pranayama('Pranayama'),
   stats('Stats'),
   settings('Settings');
 
