@@ -19,6 +19,12 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _isEditingPranayamaPositions = false;
   int _recentTimerLimit = _defaultRecentTimerLimit;
   AudioPlayer? _settingsAudioPlayer;
+  AudioPlayer? _pranayamaAudioPlayer;
+  Future<void>? _pranayamaAudioPlayback;
+  String? _pranayamaAudioPresetKey;
+  final Map<String, Uint8List> _pranayamaToneCache = <String, Uint8List>{};
+  int _pranayamaStartGeneration = 0;
+  int _pranayamaAudioGeneration = 0;
   final MeditationLogStore _logStore = const MeditationLogStore();
   final BackgroundTimerService _backgroundTimerService =
       const BackgroundTimerService();
@@ -48,6 +54,7 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void dispose() {
     _pranayamaTicker?.cancel();
+    _disposePranayamaAudioPlayers();
     _settingsAudioPlayer?.dispose();
     super.dispose();
   }
@@ -129,6 +136,11 @@ class _HomeScreenState extends State<HomeScreen> {
     setState(() {
       _soundEnabled = enabled;
     });
+    if (!enabled) {
+      unawaited(_mutePranayamaAudio());
+    } else {
+      unawaited(_syncPranayamaAudio());
+    }
 
     final preferences = await SharedPreferences.getInstance();
     await preferences.setBool(_soundEnabledKey, enabled);
@@ -228,6 +240,206 @@ class _HomeScreenState extends State<HomeScreen> {
         _showMessage('Could not export meditation logs.');
       }
     }
+  }
+
+  Future<void> _reinstallDefaultPresets() async {
+    try {
+      final bundle = await _loadDefaultPresetBundle();
+      final conflictChoice = await _resolvePresetImportConflicts(bundle);
+      if (conflictChoice == null) {
+        return;
+      }
+
+      final result = await _mergePresetBundle(
+        bundle,
+        overrideExisting: conflictChoice == _PresetConflictChoice.override,
+      );
+      if (!mounted) {
+        return;
+      }
+
+      _showMessage(_presetImportMessage('Reinstalled default presets', result));
+    } on Object {
+      if (mounted) {
+        _showMessage('Could not reinstall default presets.');
+      }
+    }
+  }
+
+  Future<void> _importPresetsJson() async {
+    try {
+      final result = await FilePicker.pickFiles(
+        dialogTitle: 'Import presets',
+        type: FileType.custom,
+        allowedExtensions: const ['json'],
+        withData: true,
+      );
+      if (result == null || result.files.isEmpty) {
+        return;
+      }
+
+      final bytes = result.files.single.bytes;
+      if (bytes == null) {
+        _showMessage('Could not read the selected presets file.');
+        return;
+      }
+
+      final bundle = _decodePresetBundle(
+        utf8.decode(bytes, allowMalformed: true),
+      );
+      if (bundle == null) {
+        _showMessage('Could not understand that presets file.');
+        return;
+      }
+
+      final conflictChoice = await _resolvePresetImportConflicts(bundle);
+      if (conflictChoice == null) {
+        return;
+      }
+
+      final importResult = await _mergePresetBundle(
+        bundle,
+        overrideExisting: conflictChoice == _PresetConflictChoice.override,
+      );
+      if (!mounted) {
+        return;
+      }
+
+      _showMessage(_presetImportMessage('Imported presets', importResult));
+    } on Object {
+      if (mounted) {
+        _showMessage('Could not import presets from that JSON file.');
+      }
+    }
+  }
+
+  Future<void> _exportPresetsJson() async {
+    try {
+      final jsonText = _encodePresetBundle(
+        _PresetBundle(
+          timerEntries: _timerEntries,
+          pranayamaEntries: _pranayamaEntries,
+        ),
+      );
+      final savedPath = await FilePicker.saveFile(
+        dialogTitle: 'Export presets',
+        fileName: 'breath-and-insight-presets.json',
+        type: FileType.custom,
+        allowedExtensions: const ['json'],
+        bytes: Uint8List.fromList(utf8.encode(jsonText)),
+      );
+
+      if (!mounted) {
+        return;
+      }
+
+      if (kIsWeb || savedPath != null) {
+        _showMessage('Exported presets.');
+      }
+    } on Object {
+      if (mounted) {
+        _showMessage('Could not export presets.');
+      }
+    }
+  }
+
+  Future<_PresetBundle> _loadDefaultPresetBundle() async {
+    final jsonText = await rootBundle.loadString('assets/default-presets.json');
+    final bundle = _decodePresetBundle(jsonText);
+    if (bundle == null) {
+      throw const FormatException('Invalid default presets JSON');
+    }
+
+    return bundle;
+  }
+
+  Future<_PresetConflictChoice?> _resolvePresetImportConflicts(
+    _PresetBundle bundle,
+  ) async {
+    final conflicts = _presetBundleConflicts(
+      timerEntries: _timerEntries,
+      pranayamaEntries: _pranayamaEntries,
+      importedBundle: bundle,
+    );
+    if (conflicts == 0) {
+      return _PresetConflictChoice.ignore;
+    }
+
+    return showDialog<_PresetConflictChoice>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          backgroundColor: _homeSurfaceColor,
+          title: const Text('Preset titles already exist'),
+          content: Text(
+            '$conflicts imported presets have titles that already exist. Override all matching presets, or ignore all matching presets?',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              key: const ValueKey('ignore-preset-conflicts-button'),
+              onPressed: () =>
+                  Navigator.of(context).pop(_PresetConflictChoice.ignore),
+              child: const Text('Ignore'),
+            ),
+            TextButton(
+              key: const ValueKey('override-preset-conflicts-button'),
+              onPressed: () =>
+                  Navigator.of(context).pop(_PresetConflictChoice.override),
+              child: const Text('Override'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Future<_PresetImportResult> _mergePresetBundle(
+    _PresetBundle bundle, {
+    required bool overrideExisting,
+  }) async {
+    final timerMerge = _mergeTimerEntryPresets(
+      _timerEntries,
+      bundle.timerEntries,
+      overrideExisting: overrideExisting,
+    );
+    final pranayamaMerge = _mergePranayamaEntryPresets(
+      _pranayamaEntries,
+      bundle.pranayamaEntries,
+      overrideExisting: overrideExisting,
+    );
+
+    setState(() {
+      _timerEntries
+        ..clear()
+        ..addAll(timerMerge.entries);
+      _pranayamaEntries
+        ..clear()
+        ..addAll(pranayamaMerge.entries);
+      final activePreset = _activePranayamaPreset;
+      if (activePreset != null) {
+        _activePranayamaPreset =
+            _pranayamaPresetByIdInEntries(activePreset.id, _pranayamaEntries) ??
+            activePreset;
+        _pranayamaAudioPresetKey = null;
+      }
+    });
+
+    await _saveTimerEntries();
+    await _savePranayamaEntries();
+    if (_activePranayamaPreset != null && !_isPranayamaPaused) {
+      unawaited(_syncPranayamaAudio(forceRestart: true));
+    }
+
+    return _PresetImportResult(
+      addedCount: timerMerge.addedCount + pranayamaMerge.addedCount,
+      overwrittenCount:
+          timerMerge.overwrittenCount + pranayamaMerge.overwrittenCount,
+      skippedCount: timerMerge.skippedCount + pranayamaMerge.skippedCount,
+    );
   }
 
   Future<void> _prepareBackgroundTimerSupport() async {
@@ -1025,12 +1237,31 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _startPranayamaPreset(PranayamaPreset preset) {
+    unawaited(_beginPranayamaPreset(preset));
+  }
+
+  Future<void> _beginPranayamaPreset(PranayamaPreset preset) async {
+    final startGeneration = ++_pranayamaStartGeneration;
     _recordRecentPranayamaPreset(preset);
     setState(() {
       _activePranayamaPreset = preset;
-      _pranayamaStartedAt = DateTime.now();
+      _pranayamaStartedAt = null;
       _pranayamaElapsedBeforePause = Duration.zero;
       _isPranayamaPaused = false;
+      _pranayamaAudioPresetKey = null;
+    });
+    unawaited(_backgroundTimerService.start());
+    await _warmUpPranayamaAudioIfNeeded();
+
+    if (!mounted ||
+        startGeneration != _pranayamaStartGeneration ||
+        _activePranayamaPreset?.id != preset.id ||
+        _isPranayamaPaused) {
+      return;
+    }
+
+    setState(() {
+      _pranayamaStartedAt = DateTime.now();
     });
     _ensurePranayamaTicker();
   }
@@ -1041,20 +1272,43 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
 
-    setState(() {
-      if (_isPranayamaPaused) {
-        _pranayamaStartedAt = DateTime.now();
-        _isPranayamaPaused = false;
-        _ensurePranayamaTicker();
-      } else {
+    if (_isPranayamaPaused) {
+      unawaited(_resumePranayamaPreset(preset));
+    } else {
+      _pranayamaStartGeneration++;
+      setState(() {
         _pranayamaElapsedBeforePause = _currentPranayamaElapsed;
         _pranayamaStartedAt = null;
         _isPranayamaPaused = true;
-      }
+      });
+      unawaited(_mutePranayamaAudio());
+    }
+  }
+
+  Future<void> _resumePranayamaPreset(PranayamaPreset preset) async {
+    final startGeneration = ++_pranayamaStartGeneration;
+    setState(() {
+      _pranayamaStartedAt = null;
+      _isPranayamaPaused = false;
+      _pranayamaAudioPresetKey = null;
     });
+    await _warmUpPranayamaAudioIfNeeded();
+
+    if (!mounted ||
+        startGeneration != _pranayamaStartGeneration ||
+        _activePranayamaPreset?.id != preset.id ||
+        _isPranayamaPaused) {
+      return;
+    }
+
+    setState(() {
+      _pranayamaStartedAt = DateTime.now();
+    });
+    _ensurePranayamaTicker();
   }
 
   void _stopPranayamaSession({bool updateState = true}) {
+    _pranayamaStartGeneration++;
     _pranayamaTicker?.cancel();
     _pranayamaTicker = null;
 
@@ -1063,7 +1317,11 @@ class _HomeScreenState extends State<HomeScreen> {
       _pranayamaStartedAt = null;
       _pranayamaElapsedBeforePause = Duration.zero;
       _isPranayamaPaused = false;
+      _pranayamaAudioPresetKey = null;
     }
+
+    unawaited(_stopPranayamaAudio());
+    unawaited(_backgroundTimerService.stop());
 
     if (updateState) {
       setState(clearSession);
@@ -1073,7 +1331,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _ensurePranayamaTicker() {
-    _pranayamaTicker ??= Timer.periodic(const Duration(milliseconds: 250), (_) {
+    _pranayamaTicker ??= Timer.periodic(const Duration(milliseconds: 16), (_) {
       if (!mounted) {
         return;
       }
@@ -1084,13 +1342,103 @@ class _HomeScreenState extends State<HomeScreen> {
       }
 
       final elapsed = _currentPranayamaElapsed;
-      if (preset.duration != null && elapsed >= preset.duration!) {
+      final effectiveDuration = _effectivePranayamaDuration(preset);
+      if (effectiveDuration != null && elapsed >= effectiveDuration) {
         _stopPranayamaSession();
         return;
       }
 
       setState(() {});
     });
+  }
+
+  Future<void> _warmUpPranayamaAudioIfNeeded() async {
+    final audioStarted = await _startPranayamaAudio();
+    if (audioStarted) {
+      await Future<void>.delayed(const Duration(milliseconds: 90));
+    }
+  }
+
+  Future<bool> _startPranayamaAudio() async {
+    if (!_soundEnabled ||
+        _activePranayamaPreset == null ||
+        _isPranayamaPaused) {
+      return false;
+    }
+
+    _pranayamaAudioPlayer ??= AudioPlayer();
+    await _syncPranayamaAudio(forceRestart: true);
+    return true;
+  }
+
+  Future<void> _syncPranayamaAudio({bool forceRestart = false}) async {
+    final preset = _activePranayamaPreset;
+    if (!_soundEnabled || preset == null || _isPranayamaPaused) {
+      await _mutePranayamaAudio();
+      return;
+    }
+
+    final presetKey = _pranayamaToneCacheKey(preset);
+    if (!forceRestart && presetKey == _pranayamaAudioPresetKey) {
+      return;
+    }
+
+    _pranayamaAudioPresetKey = presetKey;
+    final toneBytes = _toneBytesForPranayamaPreset(preset);
+    final audioPlayer = _pranayamaAudioPlayer ??= AudioPlayer();
+    final cycleDuration = _pranayamaCycleDuration(preset);
+    final seekPosition = Duration(
+      milliseconds:
+          _currentPranayamaElapsed.inMilliseconds %
+          cycleDuration.inMilliseconds,
+    );
+    final audioGeneration = ++_pranayamaAudioGeneration;
+    _pranayamaAudioPlayback = (_pranayamaAudioPlayback ?? Future.value()).then((
+      _,
+    ) async {
+      await audioPlayer.stop();
+      if (audioGeneration != _pranayamaAudioGeneration) {
+        return;
+      }
+      await audioPlayer.setReleaseMode(ReleaseMode.loop);
+      await audioPlayer.play(
+        BytesSource(toneBytes, mimeType: 'audio/wav'),
+        volume: 1,
+      );
+      if (audioGeneration != _pranayamaAudioGeneration) {
+        await audioPlayer.stop();
+        return;
+      }
+      if (seekPosition > Duration.zero) {
+        await audioPlayer.seek(seekPosition);
+      }
+    });
+    await _pranayamaAudioPlayback;
+  }
+
+  Future<void> _mutePranayamaAudio() async {
+    _pranayamaAudioGeneration++;
+    _pranayamaAudioPresetKey = null;
+    await _pranayamaAudioPlayer?.stop();
+  }
+
+  Future<void> _stopPranayamaAudio() async {
+    _pranayamaAudioGeneration++;
+    _pranayamaAudioPresetKey = null;
+    await _pranayamaAudioPlayer?.stop();
+    _pranayamaAudioPlayback = null;
+  }
+
+  void _disposePranayamaAudioPlayers() {
+    unawaited(_pranayamaAudioPlayer?.dispose() ?? Future.value());
+  }
+
+  Uint8List _toneBytesForPranayamaPreset(PranayamaPreset preset) {
+    final cacheKey = _pranayamaToneCacheKey(preset);
+    return _pranayamaToneCache.putIfAbsent(
+      cacheKey,
+      () => _generatePranayamaCycleToneBytes(preset),
+    );
   }
 
   Duration get _currentPranayamaElapsed {
@@ -1232,6 +1580,9 @@ class _HomeScreenState extends State<HomeScreen> {
                       onPrepareBackgroundTimerSupport:
                           _prepareBackgroundTimerSupport,
                       onOpenBackgroundSetupGuide: _openBackgroundSetupHelp,
+                      onReinstallDefaultPresets: _reinstallDefaultPresets,
+                      onImportPresets: _importPresetsJson,
+                      onExportPresets: _exportPresetsJson,
                       onImportLogs: _importLogsCsv,
                       onExportLogs: _exportLogsCsv,
                       onPurgeLogs: _confirmPurgeLogs,
@@ -1386,4 +1737,382 @@ class _HomeSettingsTabButton extends StatelessWidget {
       icon: const Icon(Icons.settings_outlined),
     );
   }
+}
+
+enum _PresetConflictChoice { override, ignore }
+
+class _PresetBundle {
+  const _PresetBundle({
+    required this.timerEntries,
+    required this.pranayamaEntries,
+  });
+
+  final List<TimerBrowserEntry> timerEntries;
+  final List<PranayamaBrowserEntry> pranayamaEntries;
+}
+
+class _PresetImportResult {
+  const _PresetImportResult({
+    required this.addedCount,
+    required this.overwrittenCount,
+    required this.skippedCount,
+  });
+
+  final int addedCount;
+  final int overwrittenCount;
+  final int skippedCount;
+}
+
+class _TimerPresetMergeResult {
+  const _TimerPresetMergeResult({
+    required this.entries,
+    required this.addedCount,
+    required this.overwrittenCount,
+    required this.skippedCount,
+  });
+
+  final List<TimerBrowserEntry> entries;
+  final int addedCount;
+  final int overwrittenCount;
+  final int skippedCount;
+}
+
+class _PranayamaPresetMergeResult {
+  const _PranayamaPresetMergeResult({
+    required this.entries,
+    required this.addedCount,
+    required this.overwrittenCount,
+    required this.skippedCount,
+  });
+
+  final List<PranayamaBrowserEntry> entries;
+  final int addedCount;
+  final int overwrittenCount;
+  final int skippedCount;
+}
+
+_PresetBundle? _decodePresetBundle(String jsonText) {
+  try {
+    final decoded = jsonDecode(jsonText);
+    if (decoded is! Map<String, Object?>) {
+      return null;
+    }
+
+    final encodedTimers = decoded['timers'];
+    final encodedPranayama = decoded['pranayama'];
+    if (encodedTimers is! List || encodedPranayama is! List) {
+      return null;
+    }
+
+    final timerEntries = _decodeTimerEntries(jsonEncode(encodedTimers));
+    final pranayamaEntries = _decodePranayamaEntries(
+      jsonEncode(encodedPranayama),
+    );
+    if (timerEntries == null || pranayamaEntries == null) {
+      return null;
+    }
+
+    return _PresetBundle(
+      timerEntries: timerEntries,
+      pranayamaEntries: pranayamaEntries,
+    );
+  } on FormatException {
+    return null;
+  } on TypeError {
+    return null;
+  }
+}
+
+String _encodePresetBundle(_PresetBundle bundle) {
+  const encoder = JsonEncoder.withIndent('  ');
+  return encoder.convert({
+    'timers': _encodeTimerEntries(bundle.timerEntries),
+    'pranayama': _encodePranayamaEntries(bundle.pranayamaEntries),
+  });
+}
+
+int _presetBundleConflicts({
+  required List<TimerBrowserEntry> timerEntries,
+  required List<PranayamaBrowserEntry> pranayamaEntries,
+  required _PresetBundle importedBundle,
+}) {
+  final timerNames = _timerNamesInEntries(timerEntries);
+  final pranayamaNames = _pranayamaPresetNamesInEntries(pranayamaEntries);
+  var conflicts = 0;
+
+  for (final importedTimer in _flattenTimerPresets(
+    importedBundle.timerEntries,
+  )) {
+    if (timerNames.contains(importedTimer.preset.name)) {
+      conflicts += 1;
+    }
+  }
+  for (final importedPreset in _flattenPranayamaPresets(
+    importedBundle.pranayamaEntries,
+  )) {
+    if (pranayamaNames.contains(importedPreset.preset.name)) {
+      conflicts += 1;
+    }
+  }
+
+  return conflicts;
+}
+
+String _presetImportMessage(String prefix, _PresetImportResult result) {
+  return '$prefix. Added ${result.addedCount}, overridden ${result.overwrittenCount}, skipped ${result.skippedCount}.';
+}
+
+_TimerPresetMergeResult _mergeTimerEntryPresets(
+  List<TimerBrowserEntry> currentEntries,
+  List<TimerBrowserEntry> importedEntries, {
+  required bool overrideExisting,
+}) {
+  final entries = _copyTimerEntries(currentEntries);
+  var addedCount = 0;
+  var overwrittenCount = 0;
+  var skippedCount = 0;
+
+  for (final importedTimer in _flattenTimerPresets(importedEntries)) {
+    if (_timerNamesInEntries(entries).contains(importedTimer.preset.name)) {
+      if (overrideExisting) {
+        _replaceTimerPresetByName(entries, importedTimer.preset);
+        overwrittenCount += 1;
+      } else {
+        skippedCount += 1;
+      }
+      continue;
+    }
+
+    _insertTimerPresetInFolder(entries, importedTimer);
+    addedCount += 1;
+  }
+
+  return _TimerPresetMergeResult(
+    entries: entries,
+    addedCount: addedCount,
+    overwrittenCount: overwrittenCount,
+    skippedCount: skippedCount,
+  );
+}
+
+_PranayamaPresetMergeResult _mergePranayamaEntryPresets(
+  List<PranayamaBrowserEntry> currentEntries,
+  List<PranayamaBrowserEntry> importedEntries, {
+  required bool overrideExisting,
+}) {
+  final entries = _copyPranayamaEntries(currentEntries);
+  var addedCount = 0;
+  var overwrittenCount = 0;
+  var skippedCount = 0;
+
+  for (final importedPreset in _flattenPranayamaPresets(importedEntries)) {
+    if (_pranayamaPresetNamesInEntries(
+      entries,
+    ).contains(importedPreset.preset.name)) {
+      if (overrideExisting) {
+        _replacePranayamaPresetByName(entries, importedPreset.preset);
+        overwrittenCount += 1;
+      } else {
+        skippedCount += 1;
+      }
+      continue;
+    }
+
+    _insertPranayamaPresetInFolder(entries, importedPreset);
+    addedCount += 1;
+  }
+
+  return _PranayamaPresetMergeResult(
+    entries: entries,
+    addedCount: addedCount,
+    overwrittenCount: overwrittenCount,
+    skippedCount: skippedCount,
+  );
+}
+
+List<TimerBrowserEntry> _copyTimerEntries(List<TimerBrowserEntry> entries) {
+  return [
+    for (final entry in entries)
+      switch (entry) {
+        TimerPresetEntry(:final timer) => TimerPresetEntry(timer),
+        TimerFolderEntry(:final folder) => TimerFolderEntry(
+          TimerFolder(name: folder.name, timers: List.of(folder.timers)),
+        ),
+      },
+  ];
+}
+
+List<PranayamaBrowserEntry> _copyPranayamaEntries(
+  List<PranayamaBrowserEntry> entries,
+) {
+  return [
+    for (final entry in entries)
+      switch (entry) {
+        PranayamaPresetEntry(:final preset) => PranayamaPresetEntry(preset),
+        PranayamaFolderEntry(:final folder) => PranayamaFolderEntry(
+          PranayamaFolder(name: folder.name, presets: List.of(folder.presets)),
+        ),
+      },
+  ];
+}
+
+Set<String> _timerNamesInEntries(List<TimerBrowserEntry> entries) {
+  return {
+    for (final importedTimer in _flattenTimerPresets(entries))
+      importedTimer.preset.name,
+  };
+}
+
+Set<String> _pranayamaPresetNamesInEntries(
+  List<PranayamaBrowserEntry> entries,
+) {
+  return {
+    for (final importedPreset in _flattenPranayamaPresets(entries))
+      importedPreset.preset.name,
+  };
+}
+
+List<({MeditationTimerPreset preset, String? folderName})> _flattenTimerPresets(
+  List<TimerBrowserEntry> entries,
+) {
+  final presets = <({MeditationTimerPreset preset, String? folderName})>[];
+  for (final entry in entries) {
+    switch (entry) {
+      case TimerPresetEntry(:final timer):
+        presets.add((preset: timer, folderName: null));
+      case TimerFolderEntry(:final folder):
+        for (final timer in folder.timers) {
+          presets.add((preset: timer, folderName: folder.name));
+        }
+    }
+  }
+
+  return presets;
+}
+
+List<({PranayamaPreset preset, String? folderName})> _flattenPranayamaPresets(
+  List<PranayamaBrowserEntry> entries,
+) {
+  final presets = <({PranayamaPreset preset, String? folderName})>[];
+  for (final entry in entries) {
+    switch (entry) {
+      case PranayamaPresetEntry(:final preset):
+        presets.add((preset: preset, folderName: null));
+      case PranayamaFolderEntry(:final folder):
+        for (final preset in folder.presets) {
+          presets.add((preset: preset, folderName: folder.name));
+        }
+    }
+  }
+
+  return presets;
+}
+
+void _replaceTimerPresetByName(
+  List<TimerBrowserEntry> entries,
+  MeditationTimerPreset preset,
+) {
+  for (var index = 0; index < entries.length; index += 1) {
+    final entry = entries[index];
+    switch (entry) {
+      case TimerPresetEntry(:final timer):
+        if (timer.name == preset.name) {
+          entries[index] = TimerPresetEntry(preset);
+          return;
+        }
+      case TimerFolderEntry(:final folder):
+        final timerIndex = folder.timers.indexWhere(
+          (timer) => timer.name == preset.name,
+        );
+        if (timerIndex != -1) {
+          final timers = List<MeditationTimerPreset>.of(folder.timers);
+          timers[timerIndex] = preset;
+          entries[index] = TimerFolderEntry(folder.withTimers(timers));
+          return;
+        }
+    }
+  }
+}
+
+void _replacePranayamaPresetByName(
+  List<PranayamaBrowserEntry> entries,
+  PranayamaPreset replacement,
+) {
+  for (var index = 0; index < entries.length; index += 1) {
+    final entry = entries[index];
+    switch (entry) {
+      case PranayamaPresetEntry(preset: final existingPreset):
+        if (existingPreset.name == replacement.name) {
+          entries[index] = PranayamaPresetEntry(replacement);
+          return;
+        }
+      case PranayamaFolderEntry(:final folder):
+        final presetIndex = folder.presets.indexWhere(
+          (folderPreset) => folderPreset.name == replacement.name,
+        );
+        if (presetIndex != -1) {
+          final presets = List<PranayamaPreset>.of(folder.presets);
+          presets[presetIndex] = replacement;
+          entries[index] = PranayamaFolderEntry(folder.withPresets(presets));
+          return;
+        }
+    }
+  }
+}
+
+void _insertTimerPresetInFolder(
+  List<TimerBrowserEntry> entries,
+  ({MeditationTimerPreset preset, String? folderName}) importedTimer,
+) {
+  final folderName = importedTimer.folderName;
+  if (folderName == null) {
+    entries.add(TimerPresetEntry(importedTimer.preset));
+    return;
+  }
+
+  for (var index = 0; index < entries.length; index += 1) {
+    final entry = entries[index];
+    if (entry is TimerFolderEntry && entry.folder.name == folderName) {
+      entries[index] = TimerFolderEntry(
+        entry.folder.withTimers([...entry.folder.timers, importedTimer.preset]),
+      );
+      return;
+    }
+  }
+
+  entries.add(
+    TimerFolderEntry(
+      TimerFolder(name: folderName, timers: [importedTimer.preset]),
+    ),
+  );
+}
+
+void _insertPranayamaPresetInFolder(
+  List<PranayamaBrowserEntry> entries,
+  ({PranayamaPreset preset, String? folderName}) importedPreset,
+) {
+  final folderName = importedPreset.folderName;
+  if (folderName == null) {
+    entries.add(PranayamaPresetEntry(importedPreset.preset));
+    return;
+  }
+
+  for (var index = 0; index < entries.length; index += 1) {
+    final entry = entries[index];
+    if (entry is PranayamaFolderEntry && entry.folder.name == folderName) {
+      entries[index] = PranayamaFolderEntry(
+        entry.folder.withPresets([
+          ...entry.folder.presets,
+          importedPreset.preset,
+        ]),
+      );
+      return;
+    }
+  }
+
+  entries.add(
+    PranayamaFolderEntry(
+      PranayamaFolder(name: folderName, presets: [importedPreset.preset]),
+    ),
+  );
 }

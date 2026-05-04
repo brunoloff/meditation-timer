@@ -1,0 +1,152 @@
+{
+  "timers": [
+    {
+      "type": "timer",
+      "timer": {
+        "id": "timer-20-minutes",
+        "name": "Quick 20 minutes",
+        "note": "",
+        "activity": "Meditation",
+        "durationSeconds": 1200,
+        "startingBell": "audio/bells/bell-very-long.mp3",
+        "endingBell": "audio/bells/bowl-low-and-long.mp3",
+        "intermediateBells": []
+      }
+    },
+    {
+      "type": "timer",
+      "timer": {
+        "id": "timer-infinite-meditation",
+        "name": "Infinite meditation",
+        "note": "Bells every 5m",
+        "activity": "Meditation",
+        "durationSeconds": null,
+        "startingBell": "audio/bells/bell-very-long.mp3",
+        "endingBell": "audio/bells/bowl-low-and-long.mp3",
+        "intermediateBells": [
+          {
+            "startTimeSeconds": 1800,
+            "bell": "audio/bells/bowl-wahwah.mp3",
+            "repeatIntervalSeconds": 1800
+          },
+          {
+            "startTimeSeconds": 900,
+            "bell": "audio/bells/bowl-hard-struck.mp3",
+            "repeatIntervalSeconds": 900
+          },
+          {
+            "startTimeSeconds": 300,
+            "bell": "audio/bells/wood-knock.mp3",
+            "repeatIntervalSeconds": 300
+          }
+        ]
+      }
+    },
+    {
+      "type": "folder",
+      "folder": "Long sessions",
+      "timers": [
+        {
+          "id": "timer-1-hour",
+          "name": "1 hour",
+          "note": "",
+          "activity": "Meditation",
+          "durationSeconds": 3600,
+          "startingBell": "audio/bells/bell-very-long.mp3",
+          "endingBell": "audio/bells/bowl-low-and-long.mp3",
+          "intermediateBells": []
+        }
+      ]
+    }
+  ],
+  "pranayama": [
+    {
+      "type": "preset",
+      "preset": {
+        "id": "pranayama-6-in-8-out",
+        "name": "6 in 8 out",
+        "note": "Long exhale",
+        "durationSeconds": 750,
+        "inBreathSeconds": 6,
+        "firstHoldSeconds": 0,
+        "outBreathSeconds": 8,
+        "secondHoldSeconds": 0
+      }
+    },
+    {
+      "type": "preset",
+      "preset": {
+        "id": "pranayama-gentle-breath",
+        "name": "Gentle breath",
+        "note": "No fixed ending",
+        "durationSeconds": null,
+        "inBreathSeconds": 5,
+        "firstHoldSeconds": 0,
+        "outBreathSeconds": 5,
+        "secondHoldSeconds": 0
+      }
+    },
+    {
+      "type": "folder",
+      "folder": "Balancing",
+      "presets": [
+        {
+          "id": "pranayama-box-breathing",
+          "name": "Box breathing",
+          "note": "Even rhythm",
+          "durationSeconds": 600,
+          "inBreathSeconds": 4,
+          "firstHoldSeconds": 4,
+          "outBreathSeconds": 4,
+          "secondHoldSeconds": 4
+        }
+      ]
+    },
+    {
+      "type": "folder",
+      "folder": "Forrest Knutson",
+      "presets": [
+        {
+          "id": "pranayama-4-5-hrv-breathing",
+          "name": "4/5 HRV Breathing",
+          "note": "",
+          "durationSeconds": null,
+          "inBreathSeconds": 4,
+          "firstHoldSeconds": 0,
+          "outBreathSeconds": 5,
+          "secondHoldSeconds": 0
+        },
+        {
+          "id": "pranayama-5-6-hrv-breathing",
+          "name": "5/6 HRV Breathing",
+          "note": "",
+          "durationSeconds": null,
+          "inBreathSeconds": 5,
+          "firstHoldSeconds": 0,
+          "outBreathSeconds": 6,
+          "secondHoldSeconds": 0
+        },
+        {
+          "id": "pranayama-6-7-hrv-breathing",
+          "name": "6/7 HRV Breathing",
+          "note": "",
+          "durationSeconds": null,
+          "inBreathSeconds": 6,
+          "firstHoldSeconds": 0,
+          "outBreathSeconds": 7,
+          "secondHoldSeconds": 0
+        },
+        {
+          "id": "pranayama-4-5-6-bpv-breathing",
+          "name": "4/5/6 BPV Breathing",
+          "note": "",
+          "durationSeconds": null,
+          "inBreathSeconds": 4,
+          "firstHoldSeconds": 5,
+          "outBreathSeconds": 6,
+          "secondHoldSeconds": 0
+        }
+      ]
+    }
+  ]
+}

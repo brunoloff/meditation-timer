@@ -5,6 +5,8 @@ const _backgroundSetupGuideUri = 'https://dontkillmyapp.com/';
 class BackgroundTimerService {
   const BackgroundTimerService();
 
+  static int _activeRequestCount = 0;
+
   Future<bool> prepare() async {
     if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) {
       return false;
@@ -31,16 +33,27 @@ class BackgroundTimerService {
     }
 
     try {
+      if (_activeRequestCount > 0 &&
+          FlutterBackground.isBackgroundExecutionEnabled) {
+        _activeRequestCount += 1;
+        return true;
+      }
+
       final initialized = await prepare();
       if (!initialized) {
         return false;
       }
 
       if (FlutterBackground.isBackgroundExecutionEnabled) {
+        _activeRequestCount += 1;
         return true;
       }
 
-      return FlutterBackground.enableBackgroundExecution();
+      final enabled = await FlutterBackground.enableBackgroundExecution();
+      if (enabled) {
+        _activeRequestCount += 1;
+      }
+      return enabled;
     } on MissingPluginException {
       return false;
     } on Object {
@@ -54,6 +67,14 @@ class BackgroundTimerService {
     }
 
     try {
+      if (_activeRequestCount > 0) {
+        _activeRequestCount -= 1;
+      }
+
+      if (_activeRequestCount > 0) {
+        return;
+      }
+
       if (FlutterBackground.isBackgroundExecutionEnabled) {
         await FlutterBackground.disableBackgroundExecution();
       }

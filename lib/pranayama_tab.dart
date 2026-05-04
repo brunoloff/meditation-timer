@@ -184,7 +184,8 @@ class _PranayamaGuidePanel extends StatelessWidget {
                 Positioned.fill(
                   child: CustomPaint(
                     painter: _PranayamaWavePainter(
-                      progress: phase.cycleProgress,
+                      preset: preset,
+                      elapsed: elapsed,
                       isActive: preset != null,
                     ),
                   ),
@@ -251,17 +252,6 @@ class _PranayamaGuidePanel extends StatelessWidget {
               ],
             ),
           ),
-          if (preset != null) ...[
-            LinearProgressIndicator(
-              value: preset!.duration == null
-                  ? null
-                  : (elapsed.inMilliseconds / preset!.duration!.inMilliseconds)
-                        .clamp(0.0, 1.0),
-              minHeight: 3,
-              color: const Color(0xFF75D4C5),
-              backgroundColor: const Color(0xFF2A3433),
-            ),
-          ],
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
             child: Column(
@@ -375,9 +365,14 @@ class _TimingValue extends StatelessWidget {
 }
 
 class _PranayamaWavePainter extends CustomPainter {
-  const _PranayamaWavePainter({required this.progress, required this.isActive});
+  const _PranayamaWavePainter({
+    required this.preset,
+    required this.elapsed,
+    required this.isActive,
+  });
 
-  final double progress;
+  final PranayamaPreset? preset;
+  final Duration elapsed;
   final bool isActive;
 
   @override
@@ -387,46 +382,266 @@ class _PranayamaWavePainter extends CustomPainter {
       ..style = PaintingStyle.stroke
       ..strokeWidth = 5
       ..strokeCap = StrokeCap.round;
-    final dotPaint = Paint()..color = const Color(0xFF75D4C5);
+    final transitionLinePaint = Paint()
+      ..color = const Color(0x88E26E6E)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 4
+      ..strokeCap = StrokeCap.round;
+    final activeDotPaint = Paint()..color = const Color(0xFF75D4C5);
+    final transitionDotPaint = Paint()..color = const Color(0xFFE26E6E);
     final fillPaint = Paint()..color = const Color(0x2618C6B0);
+    final guide = _PranayamaPathGuide.fromPreset(
+      preset,
+      elapsed: elapsed,
+      size: size,
+    );
 
     final path = Path()
-      ..moveTo(0, size.height * 0.82)
-      ..lineTo(size.width * 0.08, size.height * 0.82)
-      ..lineTo(size.width * 0.47, size.height * 0.16)
-      ..quadraticBezierTo(
-        size.width * 0.50,
-        size.height * 0.10,
-        size.width * 0.53,
-        size.height * 0.16,
-      )
-      ..lineTo(size.width * 0.92, size.height * 0.82)
-      ..lineTo(size.width, size.height * 0.82);
-
+      ..moveTo(guide.start.dx, guide.start.dy)
+      ..lineTo(guide.afterInhale.dx, guide.afterInhale.dy)
+      ..lineTo(guide.afterFirstHold.dx, guide.afterFirstHold.dy)
+      ..lineTo(guide.afterExhale.dx, guide.afterExhale.dy)
+      ..lineTo(guide.end.dx, guide.end.dy);
     final fillPath = Path.from(path)
-      ..lineTo(size.width, size.height)
-      ..lineTo(0, size.height)
+      ..lineTo(guide.end.dx, size.height)
+      ..lineTo(guide.start.dx, size.height)
       ..close();
     canvas.drawPath(fillPath, fillPaint);
     canvas.drawPath(path, linePaint);
+    _drawDashedLine(
+      canvas,
+      guide.leadingStart,
+      guide.start,
+      transitionLinePaint,
+    );
+    _drawDashedLine(canvas, guide.end, guide.trailingEnd, transitionLinePaint);
+    for (final dot in guide.transitionDots) {
+      canvas.drawCircle(dot, 9, transitionDotPaint);
+    }
+    canvas.drawCircle(guide.activeDot, isActive ? 11 : 8, activeDotPaint);
+  }
 
-    final metrics = path.computeMetrics().toList();
-    final metric = metrics.isEmpty ? null : metrics.first;
-    if (metric == null) {
+  void _drawDashedLine(Canvas canvas, Offset start, Offset end, Paint paint) {
+    const dashLength = 8.0;
+    const gapLength = 7.0;
+    final delta = end - start;
+    final distance = delta.distance;
+    if (distance <= 0) {
       return;
     }
 
-    final tangent = metric.getTangentForOffset(metric.length * progress);
-    if (tangent == null) {
-      return;
+    final direction = delta / distance;
+    var cursor = 0.0;
+    while (cursor < distance) {
+      final next = (cursor + dashLength).clamp(0.0, distance);
+      canvas.drawLine(
+        start + direction * cursor,
+        start + direction * next,
+        paint,
+      );
+      cursor = next + gapLength;
     }
-
-    canvas.drawCircle(tangent.position, isActive ? 11 : 8, dotPaint);
   }
 
   @override
   bool shouldRepaint(covariant _PranayamaWavePainter oldDelegate) {
-    return oldDelegate.progress != progress || oldDelegate.isActive != isActive;
+    return oldDelegate.preset != preset ||
+        oldDelegate.elapsed != elapsed ||
+        oldDelegate.isActive != isActive;
+  }
+}
+
+class _PranayamaPathGuide {
+  const _PranayamaPathGuide({
+    required this.leadingStart,
+    required this.start,
+    required this.afterInhale,
+    required this.afterFirstHold,
+    required this.afterExhale,
+    required this.end,
+    required this.trailingEnd,
+    required this.activeDot,
+    required this.transitionDots,
+  });
+
+  final Offset leadingStart;
+  final Offset start;
+  final Offset afterInhale;
+  final Offset afterFirstHold;
+  final Offset afterExhale;
+  final Offset end;
+  final Offset trailingEnd;
+  final Offset activeDot;
+  final List<Offset> transitionDots;
+
+  static _PranayamaPathGuide fromPreset(
+    PranayamaPreset? preset, {
+    required Duration elapsed,
+    required Size size,
+  }) {
+    final inBreath = preset?.inBreath ?? const Duration(seconds: 5);
+    final firstHold = preset?.firstHold ?? Duration.zero;
+    final outBreath = preset?.outBreath ?? const Duration(seconds: 6);
+    final secondHold = preset?.secondHold ?? Duration.zero;
+    final totalDuration = inBreath + firstHold + outBreath + secondHold;
+    final totalMilliseconds = totalDuration.inMilliseconds <= 0
+        ? 1
+        : totalDuration.inMilliseconds;
+    final graphDurationMilliseconds =
+        totalMilliseconds + _pranayamaLeadDuration.inMilliseconds * 2;
+    final bottom = size.height * 0.82;
+    final top = size.height * 0.18;
+
+    double xAtGraphDuration(Duration duration) {
+      return size.width * duration.inMilliseconds / graphDurationMilliseconds;
+    }
+
+    final leadingStart = Offset(0, bottom);
+    final start = Offset(xAtGraphDuration(_pranayamaLeadDuration), bottom);
+    final afterInhale = Offset(
+      xAtGraphDuration(_pranayamaLeadDuration + inBreath),
+      top,
+    );
+    final afterFirstHold = Offset(
+      xAtGraphDuration(_pranayamaLeadDuration + inBreath + firstHold),
+      top,
+    );
+    final afterExhale = Offset(
+      xAtGraphDuration(
+        _pranayamaLeadDuration + inBreath + firstHold + outBreath,
+      ),
+      bottom,
+    );
+    final end = Offset(
+      xAtGraphDuration(
+        _pranayamaLeadDuration + inBreath + firstHold + outBreath + secondHold,
+      ),
+      bottom,
+    );
+    final trailingEnd = Offset(size.width, bottom);
+
+    final elapsedInCycle = elapsed.inMilliseconds % totalMilliseconds;
+    final activeDot = _dotForElapsed(
+      elapsedInCycle: elapsedInCycle,
+      inBreath: inBreath,
+      firstHold: firstHold,
+      outBreath: outBreath,
+      secondHold: secondHold,
+      start: start,
+      afterInhale: afterInhale,
+      afterFirstHold: afterFirstHold,
+      afterExhale: afterExhale,
+      end: end,
+    );
+    final transitionDots = preset == null
+        ? const <Offset>[]
+        : _transitionDotsForElapsed(
+            elapsedInCycle: elapsedInCycle,
+            elapsed: elapsed,
+            preset: preset,
+            totalMilliseconds: totalMilliseconds,
+            leadDurationMilliseconds: _pranayamaLeadDuration.inMilliseconds,
+            leadingStart: leadingStart,
+            start: start,
+            end: end,
+            trailingEnd: trailingEnd,
+          );
+
+    return _PranayamaPathGuide(
+      leadingStart: leadingStart,
+      start: start,
+      afterInhale: afterInhale,
+      afterFirstHold: afterFirstHold,
+      afterExhale: afterExhale,
+      end: end,
+      trailingEnd: trailingEnd,
+      activeDot: activeDot,
+      transitionDots: transitionDots,
+    );
+  }
+
+  static List<Offset> _transitionDotsForElapsed({
+    required int elapsedInCycle,
+    required Duration elapsed,
+    required PranayamaPreset preset,
+    required int totalMilliseconds,
+    required int leadDurationMilliseconds,
+    required Offset leadingStart,
+    required Offset start,
+    required Offset end,
+    required Offset trailingEnd,
+  }) {
+    if (leadDurationMilliseconds <= 0) {
+      return const [];
+    }
+
+    final dots = <Offset>[];
+    final cycleIndex = elapsed.inMilliseconds ~/ totalMilliseconds;
+    if (cycleIndex > 0 && elapsedInCycle < leadDurationMilliseconds) {
+      final progress = elapsedInCycle / leadDurationMilliseconds;
+      dots.add(Offset.lerp(end, trailingEnd, progress)!);
+    }
+
+    final effectiveDuration = _effectivePranayamaDuration(preset);
+    final isLastCycle =
+        effectiveDuration != null &&
+        cycleIndex >= effectiveDuration.inMilliseconds ~/ totalMilliseconds - 1;
+    final millisecondsUntilNextCycle = totalMilliseconds - elapsedInCycle;
+    if (!isLastCycle &&
+        millisecondsUntilNextCycle <= leadDurationMilliseconds) {
+      final progress =
+          1 - millisecondsUntilNextCycle / leadDurationMilliseconds;
+      dots.add(Offset.lerp(leadingStart, start, progress)!);
+    }
+
+    return dots;
+  }
+
+  static Offset _dotForElapsed({
+    required int elapsedInCycle,
+    required Duration inBreath,
+    required Duration firstHold,
+    required Duration outBreath,
+    required Duration secondHold,
+    required Offset start,
+    required Offset afterInhale,
+    required Offset afterFirstHold,
+    required Offset afterExhale,
+    required Offset end,
+  }) {
+    var phaseStart = 0;
+
+    Offset interpolate(Offset begin, Offset finish, Duration duration) {
+      final phaseMilliseconds = duration.inMilliseconds;
+      if (phaseMilliseconds <= 0) {
+        return finish;
+      }
+
+      final progress =
+          (elapsedInCycle - phaseStart).clamp(0, phaseMilliseconds) /
+          phaseMilliseconds;
+      return Offset.lerp(begin, finish, progress)!;
+    }
+
+    final inhaleEnd = phaseStart + inBreath.inMilliseconds;
+    if (elapsedInCycle < inhaleEnd) {
+      return interpolate(start, afterInhale, inBreath);
+    }
+    phaseStart = inhaleEnd;
+
+    final firstHoldEnd = phaseStart + firstHold.inMilliseconds;
+    if (elapsedInCycle < firstHoldEnd) {
+      return interpolate(afterInhale, afterFirstHold, firstHold);
+    }
+    phaseStart = firstHoldEnd;
+
+    final exhaleEnd = phaseStart + outBreath.inMilliseconds;
+    if (elapsedInCycle < exhaleEnd) {
+      return interpolate(afterFirstHold, afterExhale, outBreath);
+    }
+    phaseStart = exhaleEnd;
+
+    return interpolate(afterExhale, end, secondHold);
   }
 }
 

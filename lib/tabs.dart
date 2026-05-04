@@ -1907,6 +1907,9 @@ class _SettingsTab extends StatelessWidget {
     required this.onTestSound,
     required this.onPrepareBackgroundTimerSupport,
     required this.onOpenBackgroundSetupGuide,
+    required this.onReinstallDefaultPresets,
+    required this.onImportPresets,
+    required this.onExportPresets,
     required this.onImportLogs,
     required this.onExportLogs,
     required this.onPurgeLogs,
@@ -1921,6 +1924,9 @@ class _SettingsTab extends StatelessWidget {
   final VoidCallback onTestSound;
   final VoidCallback onPrepareBackgroundTimerSupport;
   final VoidCallback onOpenBackgroundSetupGuide;
+  final VoidCallback onReinstallDefaultPresets;
+  final VoidCallback onImportPresets;
+  final VoidCallback onExportPresets;
   final VoidCallback onImportLogs;
   final VoidCallback onExportLogs;
   final VoidCallback onPurgeLogs;
@@ -2040,6 +2046,29 @@ class _SettingsTab extends StatelessWidget {
         _RecentTimerLimitControl(
           value: recentTimerLimit,
           onChanged: onRecentTimerLimitChanged,
+        ),
+        const SizedBox(height: 28),
+        const _SectionHeader(title: 'Presets'),
+        const SizedBox(height: 12),
+        _SettingsActionButton(
+          key: const ValueKey('reinstall-default-presets-button'),
+          onPressed: onReinstallDefaultPresets,
+          icon: Icons.restore_rounded,
+          label: 'Reinstall default presets',
+        ),
+        const SizedBox(height: 12),
+        _SettingsActionButton(
+          key: const ValueKey('import-presets-button'),
+          onPressed: onImportPresets,
+          icon: Icons.upload_file_outlined,
+          label: 'Import presets JSON',
+        ),
+        const SizedBox(height: 12),
+        _SettingsActionButton(
+          key: const ValueKey('export-presets-button'),
+          onPressed: onExportPresets,
+          icon: Icons.download_outlined,
+          label: 'Export presets JSON',
         ),
         const SizedBox(height: 28),
         const _SectionHeader(title: 'Logs'),

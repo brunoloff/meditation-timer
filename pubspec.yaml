@@ -65,6 +65,7 @@ flutter:
   uses-material-design: true
 
   assets:
+    - assets/default-presets.json
     - assets/audio/bells/
 
   # To add assets to your application, add an assets section, like this:

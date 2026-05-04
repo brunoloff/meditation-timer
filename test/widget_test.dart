@@ -24,7 +24,7 @@ void main() {
     expect(find.text('Stats'), findsWidgets);
     expect(find.byIcon(Icons.settings_outlined), findsOneWidget);
     expect(find.text('Recent timers'), findsOneWidget);
-    expect(find.text('20 minutes'), findsWidgets);
+    expect(find.text('Quick 20 minutes'), findsWidgets);
     expect(find.text('Long sessions'), findsOneWidget);
 
     await tester.tap(find.byKey(const ValueKey('stats-tab-button')));
@@ -64,6 +64,13 @@ void main() {
       find.byKey(const ValueKey('recent-timer-limit-value')),
       findsOneWidget,
     );
+    expect(find.text('Presets'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('reinstall-default-presets-button')),
+      findsOneWidget,
+    );
+    expect(find.byKey(const ValueKey('import-presets-button')), findsOneWidget);
+    expect(find.byKey(const ValueKey('export-presets-button')), findsOneWidget);
     expect(find.text('Logs'), findsOneWidget);
     expect(find.byKey(const ValueKey('import-logs-button')), findsOneWidget);
     expect(find.byKey(const ValueKey('export-logs-button')), findsOneWidget);
@@ -88,6 +95,7 @@ void main() {
     expect(find.text('Presets'), findsOneWidget);
     expect(find.text('6 in 8 out'), findsWidgets);
     expect(find.text('Balancing'), findsOneWidget);
+    expect(find.text('Forrest Knutson'), findsOneWidget);
 
     await tester.tap(find.byKey(const ValueKey('pranayama-6 in 8 out-root')));
     await tester.pump();
@@ -143,6 +151,46 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Breath work'), findsOneWidget);
+  });
+
+  testWidgets('pranayama session survives a meditation route round trip', (
+    WidgetTester tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({'soundEnabled': false});
+    await tester.binding.setSurfaceSize(const Size(800, 1100));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    await tester.pumpWidget(const BreathAndInsightTimerApp());
+    await tester.pump();
+
+    await tester.tap(find.byKey(const ValueKey('pranayama-tab-button')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('pranayama-6 in 8 out-root')));
+    await tester.pump();
+
+    expect(find.text('Inhale'), findsOneWidget);
+    expect(find.byKey(const ValueKey('stop-pranayama-button')), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('timers-tab-button')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('timer-Quick 20 minutes-root')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Meditation'), findsOneWidget);
+
+    await tester.tap(find.byIcon(Icons.pause_rounded));
+    await tester.pump();
+    await tester.tap(find.text('Finish early (no bell)'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('summary-continue-button')));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const ValueKey('pranayama-tab-button')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Inhale'), findsOneWidget);
+    expect(find.byKey(const ValueKey('stop-pranayama-button')), findsOneWidget);
+    expect(find.text('6 in 8 out'), findsWidgets);
   });
 
   testWidgets('sound setting can be disabled and is remembered', (
@@ -233,7 +281,7 @@ void main() {
   testWidgets('background setup guide failure shows a message', (
     WidgetTester tester,
   ) async {
-    await tester.binding.setSurfaceSize(const Size(800, 1000));
+    await tester.binding.setSurfaceSize(const Size(800, 1500));
     addTearDown(() => tester.binding.setSurfaceSize(null));
 
     await tester.pumpWidget(
@@ -298,7 +346,7 @@ void main() {
     await tester.pumpWidget(const BreathAndInsightTimerApp());
     await tester.pump();
 
-    await tester.tap(find.byKey(const ValueKey('timer-20 minutes-root')));
+    await tester.tap(find.byKey(const ValueKey('timer-Quick 20 minutes-root')));
     await tester.pumpAndSettle();
     await tester.tap(find.byIcon(Icons.pause_rounded));
     await tester.pumpAndSettle();
@@ -306,13 +354,15 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(
-      find.byKey(const ValueKey('timer-20 minutes-recent')),
+      find.byKey(const ValueKey('timer-Quick 20 minutes-recent')),
       findsOneWidget,
     );
 
     await tester.tap(find.byKey(const ValueKey('edit-timer-positions-button')));
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const ValueKey('edit-timer-timer-20 minutes')));
+    await tester.tap(
+      find.byKey(const ValueKey('edit-timer-timer-Quick 20 minutes')),
+    );
     await tester.pumpAndSettle();
 
     await tester.tap(find.byKey(const ValueKey('edit-timer-title-button')));
@@ -330,7 +380,10 @@ void main() {
       find.byKey(const ValueKey('timer-25 minutes-recent')),
       findsOneWidget,
     );
-    expect(find.byKey(const ValueKey('timer-20 minutes-recent')), findsNothing);
+    expect(
+      find.byKey(const ValueKey('timer-Quick 20 minutes-recent')),
+      findsNothing,
+    );
   });
 
   testWidgets('legacy saved bell assets are remapped to current sounds', (
@@ -430,7 +483,7 @@ void main() {
           id: 'streak-log-$offset',
           startedAt: DateTime(today.year, today.month, today.day - offset, 12),
           duration: const Duration(minutes: 20),
-          preset: '20 minutes',
+          preset: 'Quick 20 minutes',
           activity: 'Meditation',
         ),
       );
@@ -440,7 +493,7 @@ void main() {
         id: 'older-streak-log-42',
         startedAt: DateTime(today.year, today.month, today.day - 42, 12),
         duration: const Duration(hours: 2),
-        preset: '20 minutes',
+        preset: 'Quick 20 minutes',
         activity: 'Meditation',
       ),
     );
@@ -449,7 +502,7 @@ void main() {
         id: 'older-streak-log-43',
         startedAt: DateTime(today.year, today.month, today.day - 43, 12),
         duration: const Duration(hours: 6),
-        preset: '20 minutes',
+        preset: 'Quick 20 minutes',
         activity: 'Meditation',
       ),
     );
@@ -563,7 +616,7 @@ void main() {
     await tester.pumpAndSettle();
 
     final firstTimerHandle = find.byKey(
-      const ValueKey('drag-handle-timer-20 minutes'),
+      const ValueKey('drag-handle-timer-Quick 20 minutes'),
     );
     final secondTimerHandle = find.byKey(
       const ValueKey('drag-handle-timer-Infinite meditation'),
@@ -587,7 +640,9 @@ void main() {
     await tester.pumpAndSettle();
 
     final infiniteTop = tester.getTopLeft(find.text('Infinite meditation')).dy;
-    final twentyMinuteTop = tester.getTopLeft(find.text('20 minutes').last).dy;
+    final twentyMinuteTop = tester
+        .getTopLeft(find.text('Quick 20 minutes').last)
+        .dy;
     expect(infiniteTop, lessThan(twentyMinuteTop));
 
     await tester.pumpWidget(const BreathAndInsightTimerApp());
@@ -797,7 +852,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(
-      find.byKey(const ValueKey('delete-timer-timer-20 minutes')),
+      find.byKey(const ValueKey('delete-timer-timer-Quick 20 minutes')),
       findsOneWidget,
     );
     expect(
@@ -921,13 +976,15 @@ void main() {
 
     await tester.tap(find.byKey(const ValueKey('edit-timer-positions-button')));
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const ValueKey('edit-timer-timer-20 minutes')));
+    await tester.tap(
+      find.byKey(const ValueKey('edit-timer-timer-Quick 20 minutes')),
+    );
     await tester.pumpAndSettle();
 
     expect(find.text('Edit timer'), findsOneWidget);
     expect(find.byKey(const ValueKey('timers-tab-button')), findsNothing);
-    expect(find.text('Knock on wood'), findsOneWidget);
     expect(find.text('High and Long Meditation Bell'), findsOneWidget);
+    expect(find.text('Low and Long Singing Bowl'), findsOneWidget);
 
     await tester.tap(find.byKey(const ValueKey('edit-timer-title-button')));
     await tester.pumpAndSettle();
@@ -1393,6 +1450,51 @@ void main() {
     expect(deleteButton, findsNothing);
   });
 
+  testWidgets('deleted default presets can be reinstalled from settings', (
+    WidgetTester tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(800, 1400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    await tester.pumpWidget(const BreathAndInsightTimerApp());
+    await tester.pump();
+
+    await tester.tap(find.byKey(const ValueKey('edit-timer-positions-button')));
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(const ValueKey('delete-timer-timer-Quick 20 minutes')),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('confirm-delete-timer-button')));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const ValueKey('timer-Quick 20 minutes-root')),
+      findsNothing,
+    );
+
+    await tester.tap(find.byKey(const ValueKey('settings-tab-button')));
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(const ValueKey('reinstall-default-presets-button')),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(const ValueKey('ignore-preset-conflicts-button')),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('Reinstalled default presets'), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('timers-tab-button')));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const ValueKey('timer-Quick 20 minutes-root')),
+      findsOneWidget,
+    );
+  });
+
   testWidgets('finished sessions are logged and logs can be edited', (
     WidgetTester tester,
   ) async {
@@ -1404,7 +1506,7 @@ void main() {
         id: 'seed-log',
         startedAt: DateTime(2026, 5, 1, 16, 3, 29),
         duration: const Duration(minutes: 20, seconds: 4),
-        preset: '20 minutes',
+        preset: 'Quick 20 minutes',
         activity: 'Meditation',
       ),
     );
@@ -1417,7 +1519,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('View and Edit Logs'), findsOneWidget);
-    expect(find.textContaining('20 minutes'), findsOneWidget);
+    expect(find.textContaining('Quick 20 minutes'), findsOneWidget);
     expect(find.textContaining('Meditation'), findsWidgets);
 
     await tester.tap(find.byKey(const ValueKey('add-log-entry-button')));
@@ -1452,7 +1554,7 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('view-edit-logs-button')));
     await tester.pumpAndSettle();
 
-    expect(find.textContaining('20 minutes'), findsOneWidget);
+    expect(find.textContaining('Quick 20 minutes'), findsOneWidget);
     expect(find.textContaining('Manual'), findsNothing);
   });
 
@@ -1506,7 +1608,7 @@ bad-date,0:10:0,Broken,Meditation
   testWidgets('all logs can be purged from settings after confirmation', (
     WidgetTester tester,
   ) async {
-    await tester.binding.setSurfaceSize(const Size(800, 1000));
+    await tester.binding.setSurfaceSize(const Size(800, 1500));
     addTearDown(() => tester.binding.setSurfaceSize(null));
 
     const logStore = MeditationLogStore();
@@ -1515,7 +1617,7 @@ bad-date,0:10:0,Broken,Meditation
         id: 'purge-test-log',
         startedAt: DateTime(2026, 5, 1, 16),
         duration: const Duration(minutes: 20),
-        preset: '20 minutes',
+        preset: 'Quick 20 minutes',
         activity: 'Meditation',
       ),
     );
@@ -1526,7 +1628,6 @@ bad-date,0:10:0,Broken,Meditation
     await tester.pumpAndSettle();
 
     final purgeButton = find.byKey(const ValueKey('purge-logs-button'));
-    await tester.ensureVisible(purgeButton);
     await tester.tap(purgeButton);
     await tester.pumpAndSettle();
 
@@ -2055,7 +2156,7 @@ bad-date,0:10:0,Broken,Meditation
     await tester.pumpAndSettle();
 
     expect(loggedEntry, isNotNull);
-    expect(loggedEntry?.preset, '20 minutes');
+    expect(loggedEntry?.preset, 'Quick 20 minutes');
     expect(loggedEntry?.activity, 'Meditation');
     expect(loggedEntry?.duration, const Duration(seconds: 4));
     expect(find.text('Breath and Insight Timer'), findsNothing);

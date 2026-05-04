@@ -232,6 +232,11 @@ class _MeditationSessionScreenState extends State<MeditationSessionScreen>
     _timer?.cancel();
     unawaited(widget.setWakeLockEnabled(false));
     unawaited(widget.backgroundTimerService.stop());
+    if (Navigator.of(context).canPop()) {
+      Navigator.of(context).pop();
+      return;
+    }
+
     setState(() {
       _isSessionActive = false;
       _elapsed = Duration.zero;

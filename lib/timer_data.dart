@@ -174,6 +174,14 @@ const _woodKnock = BellSound(
   url: 'https://freesound.org/people/ripper351/sounds/151088/',
 );
 
+const _woodChoppingSnappy = BellSound(
+  name: 'Snappy Wood Chopping',
+  assetPath: '$_bellAssetRoot/wood-chopping-snappy.mp3',
+  tags: ['wood', 'short'],
+  info: 'Thank you to Idezen on freesound.org',
+  url: 'https://freesound.org/people/ldezem/sounds/386224/',
+);
+
 const _bellVeryLong = BellSound(
   name: 'High and Long Meditation Bell',
   assetPath: '$_bellAssetRoot/bell-very-long.mp3',
@@ -225,6 +233,7 @@ const _bowlLowAndLong = BellSound(
 
 const _bellSounds = [
   _woodKnock,
+  _woodChoppingSnappy,
   _bellVeryLong,
   _bowlInG,
   _bowlWahwah,
@@ -235,25 +244,43 @@ const _bellSounds = [
 
 const _twentyMinuteTimer = MeditationTimerPreset(
   id: 'timer-20-minutes',
-  name: '20 minutes',
+  name: 'Quick 20 minutes',
   duration: Duration(minutes: 20),
-  startingBell: _woodKnock,
-  endingBell: _bellVeryLong,
+  startingBell: _bellVeryLong,
+  endingBell: _bowlLowAndLong,
 );
 
 const _infiniteTimer = MeditationTimerPreset(
   id: 'timer-infinite-meditation',
   name: 'Infinite meditation',
   duration: null,
-  startingBell: _woodKnock,
+  note: 'Bells every 5m',
+  startingBell: _bellVeryLong,
   endingBell: _bowlLowAndLong,
+  intermediateBells: [
+    IntermediateBell(
+      startTime: Duration(minutes: 30),
+      bell: _bowlWahwah,
+      repeatInterval: Duration(minutes: 30),
+    ),
+    IntermediateBell(
+      startTime: Duration(minutes: 15),
+      bell: _bowlHardStruck,
+      repeatInterval: Duration(minutes: 15),
+    ),
+    IntermediateBell(
+      startTime: Duration(minutes: 5),
+      bell: _woodKnock,
+      repeatInterval: Duration(minutes: 5),
+    ),
+  ],
 );
 
 const _oneHourTimer = MeditationTimerPreset(
   id: 'timer-1-hour',
   name: '1 hour',
   duration: Duration(hours: 1),
-  startingBell: _bowlInG,
+  startingBell: _bellVeryLong,
   endingBell: _bowlLowAndLong,
 );
 
