@@ -90,12 +90,12 @@ BEGIN
         BLOCK "040904e4"
         BEGIN
             VALUE "CompanyName", "com.breathandinsight" "\0"
-            VALUE "FileDescription", "Breath and Insight Timer" "\0"
+            VALUE "FileDescription", "Bruno's Meditation Timer" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
             VALUE "InternalName", "breath_and_insight_timer" "\0"
             VALUE "LegalCopyright", "Copyright (C) 2026 com.breathandinsight. All rights reserved." "\0"
             VALUE "OriginalFilename", "breath_and_insight_timer.exe" "\0"
-            VALUE "ProductName", "Breath and Insight Timer" "\0"
+            VALUE "ProductName", "Bruno's Meditation Timer" "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"
         END
     END

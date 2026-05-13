@@ -1,4 +1,4 @@
-# Breath and Insight Timer
+# Bruno's Meditation Timer
 
 A cross-platform meditation timer for Android and iOS.
 

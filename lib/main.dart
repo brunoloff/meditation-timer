@@ -3,7 +3,7 @@ import 'dart:convert';
 import 'dart:math' as math;
 
 import 'package:audioplayers/audioplayers.dart';
-import 'package:file_picker/file_picker.dart';
+import 'package:file_selector/file_selector.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter_background/flutter_background.dart';
 import 'package:flutter/foundation.dart';
@@ -24,6 +24,7 @@ part 'select_sound_screen.dart';
 part 'meditation_screen.dart';
 part 'meditation_logs.dart';
 part 'logs_screen.dart';
+part 'acknowledgements_screen.dart';
 
 void main() {
   runApp(const BreathAndInsightTimerApp());
@@ -35,7 +36,7 @@ class BreathAndInsightTimerApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Breath and Insight Timer',
+      title: "Bruno's Meditation Timer",
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         brightness: Brightness.dark,
@@ -48,5 +49,19 @@ class BreathAndInsightTimerApp extends StatelessWidget {
       ),
       home: const HomeScreen(),
     );
+  }
+}
+
+Future<void> _configurePlayerForAudioMixing(AudioPlayer player) async {
+  try {
+    await player.setAudioContext(
+      AudioContextConfig(focus: AudioContextConfigFocus.mixWithOthers).build(),
+    );
+  } on MissingPluginException {
+    return;
+  } on UnimplementedError {
+    return;
+  } on Object {
+    return;
   }
 }

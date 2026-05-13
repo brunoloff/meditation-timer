@@ -239,6 +239,9 @@ class _TimerEditScreenState extends State<TimerEditScreen> {
       return null;
     }
 
+    // Users may type overflow values like 90 minutes or 3600 seconds. Duration
+    // does the carry for us, then the controllers are rewritten to canonical
+    // hh:mm:ss fields so saved timers are always valid.
     final duration = Duration(
       hours: _nonNegativeFieldValue(_hoursController),
       minutes: _nonNegativeFieldValue(_minutesController),
@@ -246,6 +249,8 @@ class _TimerEditScreenState extends State<TimerEditScreen> {
     );
 
     if (duration.inHours > 999) {
+      // Past this point the duration editor becomes unwieldy; use the explicit
+      // infinite state rather than preserving a huge finite value.
       setState(() {
         _isInfinite = true;
         _errorText = null;

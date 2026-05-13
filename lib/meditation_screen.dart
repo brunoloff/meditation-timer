@@ -11,6 +11,7 @@ class MeditationSessionScreen extends StatefulWidget {
     this.now = DateTime.now,
     this.setWakeLockEnabled = _setWakeLockEnabled,
     this.onBellPlayed,
+    this.onDetachedEndingBellRequested,
     this.onSessionFinished,
   });
 
@@ -22,6 +23,7 @@ class MeditationSessionScreen extends StatefulWidget {
   final DateTime Function() now;
   final Future<void> Function(bool enabled) setWakeLockEnabled;
   final ValueChanged<BellSound>? onBellPlayed;
+  final ValueChanged<BellSound>? onDetachedEndingBellRequested;
   final ValueChanged<MeditationLogEntry>? onSessionFinished;
 
   @override
@@ -173,7 +175,14 @@ class _MeditationSessionScreenState extends State<MeditationSessionScreen>
     if (playEndingBell &&
         (forceEndingBell || widget.playBells) &&
         widget.timer.endingBell != null) {
-      unawaited(_playBell(widget.timer.endingBell));
+      // Prefer a detached player owned by HomeScreen. Otherwise popping this
+      // route from the summary would dispose the local player and cut the bell.
+      final detachedPlayer = widget.onDetachedEndingBellRequested;
+      if (detachedPlayer != null) {
+        detachedPlayer(widget.timer.endingBell!);
+      } else {
+        unawaited(_playBell(widget.timer.endingBell));
+      }
     }
 
     final entry = MeditationLogEntry(
@@ -232,6 +241,9 @@ class _MeditationSessionScreenState extends State<MeditationSessionScreen>
     _timer?.cancel();
     unawaited(widget.setWakeLockEnabled(false));
     unawaited(widget.backgroundTimerService.stop());
+    // When launched from HomeScreen, return to that existing route so concurrent
+    // pranayama state/audio remains visible and controllable. Widget tests can
+    // still mount this screen directly, so keep the in-place fallback below.
     if (Navigator.of(context).canPop()) {
       Navigator.of(context).pop();
       return;
@@ -258,7 +270,12 @@ class _MeditationSessionScreenState extends State<MeditationSessionScreen>
       return;
     }
 
-    await _audioPlayer.play(AssetSource(bell.assetPath));
+    await _configurePlayerForAudioMixing(_audioPlayer);
+    try {
+      await _audioPlayer.play(AssetSource(bell.assetPath));
+    } on Object {
+      return;
+    }
   }
 
   Future<void> _playDueIntermediateBell(Duration elapsed) async {
@@ -292,6 +309,9 @@ class _MeditationSessionScreenState extends State<MeditationSessionScreen>
     final screenDimmed =
         _prefersDisplayDimmed &&
         (_manuallyDimmedDuringRevealWindow || !shouldReveal);
+    final activityTitle = widget.timer.activity.trim().isEmpty
+        ? 'Meditation'
+        : widget.timer.activity.trim();
 
     return Scaffold(
       backgroundColor: Colors.black,
@@ -308,11 +328,11 @@ class _MeditationSessionScreenState extends State<MeditationSessionScreen>
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     const SizedBox(height: 72),
-                    const Center(
+                    Center(
                       child: Text(
-                        'Meditation',
+                        activityTitle,
                         textAlign: TextAlign.center,
-                        style: TextStyle(
+                        style: const TextStyle(
                           color: Color(0xFF77777C),
                           fontSize: 24,
                           fontWeight: FontWeight.w400,
@@ -589,7 +609,7 @@ class _MeditationSummaryScreen extends StatelessWidget {
                       letterSpacing: 0,
                     ),
                   ),
-                  child: Text(isSaving ? 'Saving...' : 'Continue'),
+                  child: Text(isSaving ? 'Finishing...' : 'Finish'),
                 ),
               ),
               const SizedBox(height: 14),
@@ -604,7 +624,7 @@ class _MeditationSummaryScreen extends StatelessWidget {
                     letterSpacing: 0,
                   ),
                 ),
-                child: const Text('Discard session'),
+                child: const Text('Discard session (delete log)'),
               ),
             ],
           ),
@@ -778,8 +798,8 @@ class _PausedControls extends StatelessWidget {
             ),
             child: Text(
               isInfiniteTimer
-                  ? 'Finish (play bell)'
-                  : 'Finish early (play bell)',
+                  ? 'Log & Finish (play bell)'
+                  : 'Log & Finish early (play bell)',
             ),
           ),
         ),
@@ -802,7 +822,9 @@ class _PausedControls extends StatelessWidget {
               ),
             ),
             child: Text(
-              isInfiniteTimer ? 'Finish (no bell)' : 'Finish early (no bell)',
+              isInfiniteTimer
+                  ? 'Log & Finish (no bell)'
+                  : 'Log & Finish early (no bell)',
             ),
           ),
         ),

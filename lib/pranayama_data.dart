@@ -135,7 +135,7 @@ const _fourFiveHrvBreathingPreset = PranayamaPreset(
   id: 'pranayama-4-5-hrv-breathing',
   name: '4/5 HRV Breathing',
   note: '',
-  duration: null,
+  duration: Duration(minutes: 15),
   inBreath: Duration(seconds: 4),
   firstHold: Duration.zero,
   outBreath: Duration(seconds: 5),
@@ -146,7 +146,7 @@ const _fiveSixHrvBreathingPreset = PranayamaPreset(
   id: 'pranayama-5-6-hrv-breathing',
   name: '5/6 HRV Breathing',
   note: '',
-  duration: null,
+  duration: Duration(minutes: 15),
   inBreath: Duration(seconds: 5),
   firstHold: Duration.zero,
   outBreath: Duration(seconds: 6),
@@ -157,7 +157,7 @@ const _sixSevenHrvBreathingPreset = PranayamaPreset(
   id: 'pranayama-6-7-hrv-breathing',
   name: '6/7 HRV Breathing',
   note: '',
-  duration: null,
+  duration: Duration(minutes: 15),
   inBreath: Duration(seconds: 6),
   firstHold: Duration.zero,
   outBreath: Duration(seconds: 7),
@@ -168,7 +168,7 @@ const _fourFiveSixBpvBreathingPreset = PranayamaPreset(
   id: 'pranayama-4-5-6-bpv-breathing',
   name: '4/5/6 BPV Breathing',
   note: '',
-  duration: null,
+  duration: Duration(minutes: 15),
   inBreath: Duration(seconds: 4),
   firstHold: Duration(seconds: 5),
   outBreath: Duration(seconds: 6),
@@ -218,6 +218,8 @@ Duration? _effectivePranayamaDuration(PranayamaPreset preset) {
     return null;
   }
 
+  // A finite pranayama session should never stop mid-breath. The displayed
+  // clock is allowed to run past the target until the current cycle completes.
   final cycleDuration = _pranayamaCycleDuration(preset);
   final cycleMilliseconds = cycleDuration.inMilliseconds;
   final cycleCount = (targetDuration.inMilliseconds / cycleMilliseconds).ceil();
@@ -237,6 +239,9 @@ String _pranayamaToneCacheKey(PranayamaPreset preset) {
 }
 
 Uint8List _generatePranayamaCycleToneBytes(PranayamaPreset preset) {
+  // Generate one full loop instead of scheduling separate inhale/exhale clips.
+  // That keeps no-hold presets smooth: the fade-out is baked into the phase,
+  // and the player only has to loop one already-buffered WAV byte source.
   const sampleRate = 48000;
   const bytesPerSample = 2;
   const channelCount = 1;
@@ -289,6 +294,8 @@ Uint8List _generatePranayamaCycleToneBytes(PranayamaPreset preset) {
       phaseFrameCount ~/ 2,
       (sampleRate * 0.45).round(),
     );
+    // Inhale sits noticeably higher than exhale, with two quiet harmonics to
+    // avoid a sterile pure sine tone.
     final frequency = switch (phase) {
       _PranayamaSoundPhase.inhale => 330.0,
       _PranayamaSoundPhase.exhale => 247.0,

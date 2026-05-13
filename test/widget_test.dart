@@ -75,6 +75,49 @@ void main() {
     expect(find.byKey(const ValueKey('import-logs-button')), findsOneWidget);
     expect(find.byKey(const ValueKey('export-logs-button')), findsOneWidget);
     expect(find.byKey(const ValueKey('purge-logs-button')), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('acknowledgements-button')),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('acknowledgements screen opens from settings', (
+    WidgetTester tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(800, 1500));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    await tester.pumpWidget(const BreathAndInsightTimerApp());
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('settings-tab-button')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('acknowledgements-button')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Acknowledgements'), findsOneWidget);
+    expect(
+      find.textContaining('Insight Timer app', findRichText: true),
+      findsOneWidget,
+    );
+    expect(
+      find.textContaining('Forrest Knutson', findRichText: true),
+      findsOneWidget,
+    );
+    expect(
+      find.textContaining('excellent book', findRichText: true),
+      findsOneWidget,
+    );
+    expect(
+      find.textContaining('thank you to Codex', findRichText: true),
+      findsOneWidget,
+    );
+
+    await tester.tap(
+      find.byKey(const ValueKey('close-acknowledgements-button')),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Settings'), findsOneWidget);
   });
 
   testWidgets('pranayama tab can run presets inline and edit the list', (
@@ -96,6 +139,13 @@ void main() {
     expect(find.text('6 in 8 out'), findsWidgets);
     expect(find.text('Balancing'), findsOneWidget);
     expect(find.text('Forrest Knutson'), findsOneWidget);
+
+    await tester.tap(
+      find.byKey(const ValueKey('pranayama-folder-Forrest Knutson')),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('4/5 HRV Breathing'), findsOneWidget);
+    expect(find.text('15 minutes | 4-0-5-0'), findsOneWidget);
 
     await tester.tap(find.byKey(const ValueKey('pranayama-6 in 8 out-root')));
     await tester.pump();
@@ -180,7 +230,7 @@ void main() {
 
     await tester.tap(find.byIcon(Icons.pause_rounded));
     await tester.pump();
-    await tester.tap(find.text('Finish early (no bell)'));
+    await tester.tap(find.text('Log & Finish early (no bell)'));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('summary-continue-button')));
     await tester.pumpAndSettle();
@@ -1525,8 +1575,16 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('add-log-entry-button')));
     await tester.pumpAndSettle();
     await tester.enterText(
-      find.byKey(const ValueKey('log-duration-field')),
-      '1:2:3',
+      find.byKey(const ValueKey('log-duration-hours-field')),
+      '1',
+    );
+    await tester.enterText(
+      find.byKey(const ValueKey('log-duration-minutes-field')),
+      '2',
+    );
+    await tester.enterText(
+      find.byKey(const ValueKey('log-duration-seconds-field')),
+      '3',
     );
     await tester.enterText(
       find.byKey(const ValueKey('log-preset-field')),
@@ -1556,6 +1614,35 @@ void main() {
 
     expect(find.textContaining('Quick 20 minutes'), findsOneWidget);
     expect(find.textContaining('Manual'), findsNothing);
+
+    await tester.tap(find.byKey(const ValueKey('edit-log-seed-log')));
+    await tester.pumpAndSettle();
+    expect(find.text('Edit log entry'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('log-started-at-time-button')),
+      findsOneWidget,
+    );
+    await tester.enterText(
+      find.byKey(const ValueKey('log-duration-hours-field')),
+      '0',
+    );
+    await tester.enterText(
+      find.byKey(const ValueKey('log-duration-minutes-field')),
+      '90',
+    );
+    await tester.enterText(
+      find.byKey(const ValueKey('log-duration-seconds-field')),
+      '75',
+    );
+    await tester.enterText(
+      find.byKey(const ValueKey('log-activity-field')),
+      'Edited practice',
+    );
+    await tester.tap(find.byKey(const ValueKey('confirm-add-log-button')));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('1:31:15'), findsOneWidget);
+    expect(find.textContaining('Edited practice'), findsOneWidget);
   });
 
   testWidgets('logs can be imported from and exported to compatible CSV', (
@@ -1719,8 +1806,8 @@ bad-date,0:10:0,Broken,Meditation
     await tester.tap(find.byKey(const ValueKey('add-log-entry-button')));
     await tester.pumpAndSettle();
     await tester.enterText(
-      find.byKey(const ValueKey('log-duration-field')),
-      '0:10:0',
+      find.byKey(const ValueKey('log-duration-minutes-field')),
+      '10',
     );
     await tester.enterText(
       find.byKey(const ValueKey('log-preset-field')),
@@ -1798,9 +1885,33 @@ bad-date,0:10:0,Broken,Meditation
     await tester.pump();
 
     expect(find.byIcon(Icons.play_arrow_rounded), findsOneWidget);
-    expect(find.text('Finish early (play bell)'), findsOneWidget);
-    expect(find.text('Finish early (no bell)'), findsOneWidget);
+    expect(find.text('Log & Finish early (play bell)'), findsOneWidget);
+    expect(find.text('Log & Finish early (no bell)'), findsOneWidget);
     expect(find.text('Discard session'), findsOneWidget);
+  });
+
+  testWidgets('session title uses the timer activity', (
+    WidgetTester tester,
+  ) async {
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: MeditationSessionScreen(
+          playBells: false,
+          timer: MeditationTimerPreset(
+            id: 'activity-title-test',
+            name: 'Activity title test',
+            duration: Duration(minutes: 20),
+            startingBell: null,
+            endingBell: null,
+            activity: 'Breathwork',
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.text('Breathwork'), findsOneWidget);
+    expect(find.text('Meditation'), findsNothing);
   });
 
   testWidgets('wake lock is enabled during a meditation session and released', (
@@ -2133,7 +2244,7 @@ bad-date,0:10:0,Broken,Meditation
     await tester.pump(const Duration(seconds: 4));
     await tester.tap(find.byIcon(Icons.pause_rounded));
     await tester.pump();
-    await tester.tap(find.text('Finish early (no bell)'));
+    await tester.tap(find.text('Log & Finish early (no bell)'));
     await tester.pumpAndSettle();
 
     expect(loggedEntry, isNull);
@@ -2151,6 +2262,8 @@ bad-date,0:10:0,Broken,Meditation
       find.byKey(const ValueKey('summary-discard-button')),
       findsOneWidget,
     );
+    expect(find.text('Finish'), findsOneWidget);
+    expect(find.text('Discard session (delete log)'), findsOneWidget);
 
     await tester.tap(find.byKey(const ValueKey('summary-continue-button')));
     await tester.pumpAndSettle();
@@ -2163,6 +2276,56 @@ bad-date,0:10:0,Broken,Meditation
     expect(find.text('Timers'), findsWidgets);
     expect(find.text('Stats'), findsOneWidget);
   });
+
+  testWidgets(
+    'summary finish returns while detached ending bell keeps playing',
+    (WidgetTester tester) async {
+      final clock = _TestClock();
+      final detachedBells = <String>[];
+      MeditationLogEntry? loggedEntry;
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: MeditationSessionScreen(
+            now: clock.now,
+            onDetachedEndingBellRequested: (bell) {
+              detachedBells.add(bell.name);
+            },
+            onSessionFinished: (entry) {
+              loggedEntry = entry;
+            },
+            timer: const MeditationTimerPreset(
+              id: 'detached-ending-bell-session',
+              name: 'Detached ending bell session',
+              duration: Duration(minutes: 20),
+              startingBell: null,
+              endingBell: BellSound(
+                name: 'End',
+                assetPath: 'audio/bells/wood-knock.mp3',
+              ),
+            ),
+          ),
+        ),
+      );
+
+      clock.advance(const Duration(seconds: 4));
+      await tester.pump(const Duration(seconds: 4));
+      await tester.tap(find.byIcon(Icons.pause_rounded));
+      await tester.pump();
+      await tester.tap(find.text('Log & Finish early (play bell)'));
+      await tester.pumpAndSettle();
+
+      expect(detachedBells, ['End']);
+      expect(loggedEntry, isNull);
+      expect(find.text('Summary'), findsOneWidget);
+
+      await tester.tap(find.byKey(const ValueKey('summary-continue-button')));
+      await tester.pumpAndSettle();
+
+      expect(loggedEntry, isNotNull);
+      expect(find.text('Timers'), findsWidgets);
+    },
+  );
 
   testWidgets('natural timed completion plays ending bell and shows summary', (
     WidgetTester tester,

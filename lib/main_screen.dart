@@ -10,6 +10,9 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
+  // Home owns all tab-level state that must survive pushing full-screen routes
+  // such as meditation sessions and edit screens. Keeping pranayama state here
+  // is deliberate: pranayama audio can continue while the user runs a timer.
   HomeTab _selectedTab = HomeTab.timers;
   bool _recentTimersCollapsed = false;
   bool _recentPranayamaCollapsed = false;
@@ -19,10 +22,14 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _isEditingPranayamaPositions = false;
   int _recentTimerLimit = _defaultRecentTimerLimit;
   AudioPlayer? _settingsAudioPlayer;
+  AudioPlayer? _detachedEndingBellPlayer;
   AudioPlayer? _pranayamaAudioPlayer;
   Future<void>? _pranayamaAudioPlayback;
   String? _pranayamaAudioPresetKey;
   final Map<String, Uint8List> _pranayamaToneCache = <String, Uint8List>{};
+  bool _isPranayamaAudioContextConfigured = false;
+  // Async audio startup can complete after the user pauses/stops/switches a
+  // preset. These generations make those stale completions harmless.
   int _pranayamaStartGeneration = 0;
   int _pranayamaAudioGeneration = 0;
   final MeditationLogStore _logStore = const MeditationLogStore();
@@ -36,6 +43,8 @@ class _HomeScreenState extends State<HomeScreen> {
   );
   final List<String> _recentTimerIds = <String>[];
   final List<String> _recentPranayamaPresetIds = <String>[];
+  // Persisted browser entries are saved asynchronously; only the latest save
+  // should win if the user edits/reorders quickly.
   int _timerEntriesSaveGeneration = 0;
   int _pranayamaEntriesSaveGeneration = 0;
   int _statsRefreshKey = 0;
@@ -56,6 +65,7 @@ class _HomeScreenState extends State<HomeScreen> {
     _pranayamaTicker?.cancel();
     _disposePranayamaAudioPlayers();
     _settingsAudioPlayer?.dispose();
+    _detachedEndingBellPlayer?.dispose();
     super.dispose();
   }
 
@@ -162,6 +172,12 @@ class _HomeScreenState extends State<HomeScreen> {
       if (_recentTimerIds.length > nextLimit) {
         _recentTimerIds.removeRange(nextLimit, _recentTimerIds.length);
       }
+      if (_recentPranayamaPresetIds.length > nextLimit) {
+        _recentPranayamaPresetIds.removeRange(
+          nextLimit,
+          _recentPranayamaPresetIds.length,
+        );
+      }
     });
 
     final preferences = await SharedPreferences.getInstance();
@@ -169,6 +185,10 @@ class _HomeScreenState extends State<HomeScreen> {
     await preferences.setString(
       _recentTimerIdsKey,
       jsonEncode(_recentTimerIds),
+    );
+    await preferences.setString(
+      _recentPranayamaPresetIdsKey,
+      jsonEncode(_recentPranayamaPresetIds),
     );
   }
 
@@ -183,25 +203,16 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _importLogsCsv() async {
     try {
-      final result = await FilePicker.pickFiles(
-        dialogTitle: 'Import meditation logs',
-        type: FileType.custom,
-        allowedExtensions: const ['csv'],
-        withData: true,
+      final file = await openFile(
+        acceptedTypeGroups: const <XTypeGroup>[
+          XTypeGroup(label: 'CSV', extensions: <String>['csv']),
+        ],
       );
-      if (result == null || result.files.isEmpty) {
+      if (file == null) {
         return;
       }
 
-      final bytes = result.files.single.bytes;
-      if (bytes == null) {
-        _showMessage('Could not read the selected CSV file.');
-        return;
-      }
-
-      final importResult = await _logStore.importCsv(
-        utf8.decode(bytes, allowMalformed: true),
-      );
+      final importResult = await _logStore.importCsv(await file.readAsString());
       if (!mounted) {
         return;
       }
@@ -219,22 +230,28 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _exportLogsCsv() async {
     try {
       final csvText = await _logStore.exportCsv();
-      final bytes = Uint8List.fromList(utf8.encode(csvText));
-      final savedPath = await FilePicker.saveFile(
-        dialogTitle: 'Export meditation logs',
-        fileName: 'breath-and-insight-logs.csv',
-        type: FileType.custom,
-        allowedExtensions: const ['csv'],
-        bytes: bytes,
+      final saveLocation = await getSaveLocation(
+        suggestedName: 'breath-and-insight-logs.csv',
+        acceptedTypeGroups: const <XTypeGroup>[
+          XTypeGroup(label: 'CSV', extensions: <String>['csv']),
+        ],
       );
+      if (saveLocation == null) {
+        return;
+      }
+
+      final outputFile = XFile.fromData(
+        Uint8List.fromList(utf8.encode(csvText)),
+        mimeType: 'text/csv',
+        name: 'breath-and-insight-logs.csv',
+      );
+      await outputFile.saveTo(saveLocation.path);
 
       if (!mounted) {
         return;
       }
 
-      if (kIsWeb || savedPath != null) {
-        _showMessage('Exported meditation logs.');
-      }
+      _showMessage('Exported meditation logs.');
     } on Object {
       if (mounted) {
         _showMessage('Could not export meditation logs.');
@@ -268,25 +285,16 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _importPresetsJson() async {
     try {
-      final result = await FilePicker.pickFiles(
-        dialogTitle: 'Import presets',
-        type: FileType.custom,
-        allowedExtensions: const ['json'],
-        withData: true,
+      final file = await openFile(
+        acceptedTypeGroups: const <XTypeGroup>[
+          XTypeGroup(label: 'JSON', extensions: <String>['json']),
+        ],
       );
-      if (result == null || result.files.isEmpty) {
+      if (file == null) {
         return;
       }
 
-      final bytes = result.files.single.bytes;
-      if (bytes == null) {
-        _showMessage('Could not read the selected presets file.');
-        return;
-      }
-
-      final bundle = _decodePresetBundle(
-        utf8.decode(bytes, allowMalformed: true),
-      );
+      final bundle = _decodePresetBundle(await file.readAsString());
       if (bundle == null) {
         _showMessage('Could not understand that presets file.');
         return;
@@ -321,21 +329,28 @@ class _HomeScreenState extends State<HomeScreen> {
           pranayamaEntries: _pranayamaEntries,
         ),
       );
-      final savedPath = await FilePicker.saveFile(
-        dialogTitle: 'Export presets',
-        fileName: 'breath-and-insight-presets.json',
-        type: FileType.custom,
-        allowedExtensions: const ['json'],
-        bytes: Uint8List.fromList(utf8.encode(jsonText)),
+      final saveLocation = await getSaveLocation(
+        suggestedName: 'breath-and-insight-presets.json',
+        acceptedTypeGroups: const <XTypeGroup>[
+          XTypeGroup(label: 'JSON', extensions: <String>['json']),
+        ],
       );
+      if (saveLocation == null) {
+        return;
+      }
+
+      final outputFile = XFile.fromData(
+        Uint8List.fromList(utf8.encode(jsonText)),
+        mimeType: 'application/json',
+        name: 'breath-and-insight-presets.json',
+      );
+      await outputFile.saveTo(saveLocation.path);
 
       if (!mounted) {
         return;
       }
 
-      if (kIsWeb || savedPath != null) {
-        _showMessage('Exported presets.');
-      }
+      _showMessage('Exported presets.');
     } on Object {
       if (mounted) {
         _showMessage('Could not export presets.');
@@ -401,6 +416,8 @@ class _HomeScreenState extends State<HomeScreen> {
     _PresetBundle bundle, {
     required bool overrideExisting,
   }) async {
+    // Import/reinstall is title-based by design. IDs are stable for recents,
+    // but users understand duplicate preset titles better than duplicate IDs.
     final timerMerge = _mergeTimerEntryPresets(
       _timerEntries,
       bundle.timerEntries,
@@ -421,6 +438,8 @@ class _HomeScreenState extends State<HomeScreen> {
         ..addAll(pranayamaMerge.entries);
       final activePreset = _activePranayamaPreset;
       if (activePreset != null) {
+        // If the active preset was overwritten, keep the running session tied to
+        // the new definition and restart its generated cycle audio below.
         _activePranayamaPreset =
             _pranayamaPresetByIdInEntries(activePreset.id, _pranayamaEntries) ??
             activePreset;
@@ -858,6 +877,9 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _startTimer(MeditationTimerPreset timer) {
+    // A new session is allowed to interrupt an ending bell that is still
+    // ringing from the previous summary screen.
+    unawaited(_detachedEndingBellPlayer?.stop() ?? Future<void>.value());
     _recordRecentTimer(timer);
     Navigator.of(context).push(
       MaterialPageRoute<void>(
@@ -867,9 +889,21 @@ class _HomeScreenState extends State<HomeScreen> {
           turnScreenOnNearAudio: _turnScreenOnNearAudio,
           logStore: _logStore,
           backgroundTimerService: _backgroundTimerService,
+          onDetachedEndingBellRequested: _playDetachedEndingBell,
         ),
       ),
     );
+  }
+
+  Future<void> _playDetachedEndingBell(BellSound bell) async {
+    final player = _detachedEndingBellPlayer ??= AudioPlayer();
+    await _configurePlayerForAudioMixing(player);
+    try {
+      await player.stop();
+      await player.play(AssetSource(bell.assetPath));
+    } on Object {
+      return;
+    }
   }
 
   void _recordRecentTimer(MeditationTimerPreset timer) {
@@ -1251,6 +1285,9 @@ class _HomeScreenState extends State<HomeScreen> {
       _pranayamaAudioPresetKey = null;
     });
     unawaited(_backgroundTimerService.start());
+    // Start the clock after audio is ready. On Linux and Android the first play
+    // call can take a beat to reach the backend, and starting the visual clock
+    // first makes the dot drift ahead of the tone.
     await _warmUpPranayamaAudioIfNeeded();
 
     if (!mounted ||
@@ -1292,6 +1329,8 @@ class _HomeScreenState extends State<HomeScreen> {
       _isPranayamaPaused = false;
       _pranayamaAudioPresetKey = null;
     });
+    // Resume uses the same warmup path as a fresh start so audio and visuals
+    // use one shared reference point.
     await _warmUpPranayamaAudioIfNeeded();
 
     if (!mounted ||
@@ -1331,6 +1370,8 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _ensurePranayamaTicker() {
+    // 60-ish fps keeps the breathing dot smooth; elapsed time is still derived
+    // from DateTime, not tick count, so delayed frames do not accumulate drift.
     _pranayamaTicker ??= Timer.periodic(const Duration(milliseconds: 16), (_) {
       if (!mounted) {
         return;
@@ -1355,6 +1396,9 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _warmUpPranayamaAudioIfNeeded() async {
     final audioStarted = await _startPranayamaAudio();
     if (audioStarted) {
+      // Small pragmatic buffer for first-play backend latency. This is short
+      // enough to be unnoticeable but long enough to fix the observed first-run
+      // audio/visual phase offset.
       await Future<void>.delayed(const Duration(milliseconds: 90));
     }
   }
@@ -1367,6 +1411,10 @@ class _HomeScreenState extends State<HomeScreen> {
     }
 
     _pranayamaAudioPlayer ??= AudioPlayer();
+    if (!_isPranayamaAudioContextConfigured) {
+      await _configurePlayerForAudioMixing(_pranayamaAudioPlayer!);
+      _isPranayamaAudioContextConfigured = true;
+    }
     await _syncPranayamaAudio(forceRestart: true);
     return true;
   }
@@ -1387,12 +1435,16 @@ class _HomeScreenState extends State<HomeScreen> {
     final toneBytes = _toneBytesForPranayamaPreset(preset);
     final audioPlayer = _pranayamaAudioPlayer ??= AudioPlayer();
     final cycleDuration = _pranayamaCycleDuration(preset);
+    // Generated audio is one complete breath cycle loop. When changing sound
+    // settings mid-session, seek back to the matching point inside the cycle.
     final seekPosition = Duration(
       milliseconds:
           _currentPranayamaElapsed.inMilliseconds %
           cycleDuration.inMilliseconds,
     );
     final audioGeneration = ++_pranayamaAudioGeneration;
+    // Serialize stop/play/seek calls. Some platform players dislike overlapping
+    // commands, and overlap was the source of earlier clipped tone starts.
     _pranayamaAudioPlayback = (_pranayamaAudioPlayback ?? Future.value()).then((
       _,
     ) async {
@@ -1430,6 +1482,8 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _disposePranayamaAudioPlayers() {
+    _pranayamaAudioGeneration++;
+    _isPranayamaAudioContextConfigured = false;
     unawaited(_pranayamaAudioPlayer?.dispose() ?? Future.value());
   }
 
@@ -1493,6 +1547,12 @@ class _HomeScreenState extends State<HomeScreen> {
     setState(() {
       _statsRefreshKey += 1;
     });
+  }
+
+  void _openAcknowledgements() {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(builder: (_) => const AcknowledgementsScreen()),
+    );
   }
 
   @override
@@ -1586,6 +1646,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       onImportLogs: _importLogsCsv,
                       onExportLogs: _exportLogsCsv,
                       onPurgeLogs: _confirmPurgeLogs,
+                      onOpenAcknowledgements: _openAcknowledgements,
                     ),
                   },
                 ),
@@ -1824,6 +1885,9 @@ _PresetBundle? _decodePresetBundle(String jsonText) {
 }
 
 String _encodePresetBundle(_PresetBundle bundle) {
+  // This is the public preset interchange format. It deliberately reuses the
+  // same entry JSON used for SharedPreferences so import/export, persistence,
+  // and bundled defaults cannot silently drift apart.
   const encoder = JsonEncoder.withIndent('  ');
   return encoder.convert({
     'timers': _encodeTimerEntries(bundle.timerEntries),
@@ -1872,6 +1936,9 @@ _TimerPresetMergeResult _mergeTimerEntryPresets(
   var overwrittenCount = 0;
   var skippedCount = 0;
 
+  // Flatten imported folders to presets, then reinsert each preset into the
+  // matching folder in the current tree. This recreates missing defaults without
+  // disturbing unrelated user folders or their existing order.
   for (final importedTimer in _flattenTimerPresets(importedEntries)) {
     if (_timerNamesInEntries(entries).contains(importedTimer.preset.name)) {
       if (overrideExisting) {
@@ -1905,6 +1972,8 @@ _PranayamaPresetMergeResult _mergePranayamaEntryPresets(
   var overwrittenCount = 0;
   var skippedCount = 0;
 
+  // Same strategy as timers: only presets participate in conflict resolution;
+  // folders are containers recreated as needed for newly added presets.
   for (final importedPreset in _flattenPranayamaPresets(importedEntries)) {
     if (_pranayamaPresetNamesInEntries(
       entries,

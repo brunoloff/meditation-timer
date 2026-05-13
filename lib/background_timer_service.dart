@@ -5,6 +5,9 @@ const _backgroundSetupGuideUri = 'https://dontkillmyapp.com/';
 class BackgroundTimerService {
   const BackgroundTimerService();
 
+  // Meditation and pranayama can run at the same time. FlutterBackground is a
+  // single process-wide switch, so use a static reference count and only turn it
+  // off when the last active session releases it.
   static int _activeRequestCount = 0;
 
   Future<bool> prepare() async {
@@ -15,7 +18,7 @@ class BackgroundTimerService {
     try {
       return FlutterBackground.initialize(
         androidConfig: const FlutterBackgroundAndroidConfig(
-          notificationTitle: 'Breath and Insight Timer',
+          notificationTitle: "Bruno's Meditation Timer",
           notificationText: 'Meditation timer is running',
           notificationImportance: AndroidNotificationImportance.normal,
         ),
@@ -39,6 +42,8 @@ class BackgroundTimerService {
         return true;
       }
 
+      // prepare() is intentionally idempotent; Android may need initialization
+      // again after a process restart, while desktop/web simply return false.
       final initialized = await prepare();
       if (!initialized) {
         return false;
@@ -71,6 +76,7 @@ class BackgroundTimerService {
         _activeRequestCount -= 1;
       }
 
+      // Another active session still depends on background execution.
       if (_activeRequestCount > 0) {
         return;
       }

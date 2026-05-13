@@ -191,6 +191,9 @@ List<MeditationLogEntry> _decodeMeditationLogs(String? encodedLogs) {
   }
 
   try {
+    // Stored logs are append-heavy and user-editable via import/export. Skip
+    // malformed rows instead of failing the whole history, then keep newest
+    // entries first for paged browsing.
     final decoded = jsonDecode(encodedLogs);
     if (decoded is! List) {
       return const [];

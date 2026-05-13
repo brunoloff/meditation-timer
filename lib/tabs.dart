@@ -587,6 +587,9 @@ List<TimerBrowserEntry>? _decodeTimerEntries(String? encodedEntries) {
   }
 
   try {
+    // Treat the saved browser tree as untrusted input. If the top-level shape
+    // is corrupt, fall back to bundled defaults instead of partially applying
+    // an ambiguous order/folder structure.
     final decoded = jsonDecode(encodedEntries);
     if (decoded is! List) {
       return null;
@@ -680,7 +683,8 @@ MeditationTimerPreset? _decodeTimer(Object? encodedTimer) {
     return null;
   }
 
-  if (durationSeconds != null && durationSeconds is! int) {
+  if (durationSeconds != null &&
+      (durationSeconds is! int || durationSeconds < 0)) {
     return null;
   }
 
@@ -1913,6 +1917,7 @@ class _SettingsTab extends StatelessWidget {
     required this.onImportLogs,
     required this.onExportLogs,
     required this.onPurgeLogs,
+    required this.onOpenAcknowledgements,
   });
 
   final bool soundEnabled;
@@ -1930,6 +1935,7 @@ class _SettingsTab extends StatelessWidget {
   final VoidCallback onImportLogs;
   final VoidCallback onExportLogs;
   final VoidCallback onPurgeLogs;
+  final VoidCallback onOpenAcknowledgements;
 
   @override
   Widget build(BuildContext context) {
@@ -2094,6 +2100,15 @@ class _SettingsTab extends StatelessWidget {
           label: 'Purge all logs',
           foregroundColor: const Color(0xFFFF7A7A),
           borderColor: const Color(0xFF5E2626),
+        ),
+        const SizedBox(height: 28),
+        const _SectionHeader(title: 'About'),
+        const SizedBox(height: 12),
+        _SettingsActionButton(
+          key: const ValueKey('acknowledgements-button'),
+          onPressed: onOpenAcknowledgements,
+          icon: Icons.favorite_border_rounded,
+          label: 'Acknowledgements',
         ),
         const SizedBox(height: 660),
       ],

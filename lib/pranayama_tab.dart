@@ -1182,6 +1182,8 @@ class _PranayamaEditScreenState extends State<PranayamaEditScreen> {
       return null;
     }
 
+    // Accept forgiving input (for example 90 minutes) and immediately fold it
+    // back into canonical hh:mm:ss fields. This mirrors the timer editor.
     final duration = Duration(
       hours: _nonNegativeFieldValue(_hoursController),
       minutes: _nonNegativeFieldValue(_minutesController),
@@ -1189,6 +1191,8 @@ class _PranayamaEditScreenState extends State<PranayamaEditScreen> {
     );
 
     if (duration.inHours > 999) {
+      // Very large finite breath sessions are not useful to edit by hand; flip
+      // to the explicit infinite duration state.
       setState(() {
         _isInfinite = true;
         _errorText = null;
@@ -1674,6 +1678,9 @@ List<PranayamaBrowserEntry>? _decodePranayamaEntries(String? encodedEntries) {
   }
 
   try {
+    // Pranayama ordering is user-editable and persisted as a small tree.
+    // Decode all-or-nothing so corrupt storage does not create half-folders or
+    // duplicate titles that the editor cannot safely manipulate.
     final decoded = jsonDecode(encodedEntries);
     if (decoded is! List) {
       return null;
@@ -1759,7 +1766,8 @@ PranayamaPreset? _decodePranayamaPreset(Object? encodedPreset) {
   if (note != null && note is! String) {
     return null;
   }
-  if (durationSeconds != null && durationSeconds is! int) {
+  if (durationSeconds != null &&
+      (durationSeconds is! int || durationSeconds < 0)) {
     return null;
   }
   if (inBreathSeconds is! int ||

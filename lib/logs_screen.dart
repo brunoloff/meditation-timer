@@ -278,9 +278,39 @@ class _LogsScreenState extends State<LogsScreen> {
     });
   }
 
+  Future<void> _editLogEntry(MeditationLogEntry entry) async {
+    final editedEntry = await showDialog<MeditationLogEntry>(
+      context: context,
+      builder: (context) => _LogEntryDialog(entry: entry),
+    );
+
+    if (editedEntry == null) {
+      return;
+    }
+
+    setState(() {
+      final pendingIndex = _pendingAdditions.indexWhere(
+        (addition) => addition.id == entry.id,
+      );
+      if (pendingIndex >= 0) {
+        _pendingAdditions[pendingIndex] = editedEntry;
+      } else {
+        _pendingDeletedIds.add(entry.id);
+        _pendingAdditions.insert(0, editedEntry);
+      }
+    });
+  }
+
   void _deleteLogEntry(MeditationLogEntry entry) {
     setState(() {
+      final pendingAdditionRemoved =
+          _pendingAdditions.indexWhere((addition) => addition.id == entry.id) >=
+          0;
       _pendingAdditions.removeWhere((addition) => addition.id == entry.id);
+      if (pendingAdditionRemoved) {
+        return;
+      }
+
       if (!_pendingDeletedIds.remove(entry.id)) {
         _pendingDeletedIds.add(entry.id);
       }
@@ -375,6 +405,7 @@ class _LogsScreenState extends State<LogsScreen> {
                           final entry = visibleEntries[index];
                           return _LogEntryRow(
                             entry: entry,
+                            onEdit: () => _editLogEntry(entry),
                             onDelete: () => _deleteLogEntry(entry),
                           );
                         },
@@ -502,9 +533,14 @@ class _DateFilterRow extends StatelessWidget {
 }
 
 class _LogEntryRow extends StatelessWidget {
-  const _LogEntryRow({required this.entry, required this.onDelete});
+  const _LogEntryRow({
+    required this.entry,
+    required this.onEdit,
+    required this.onDelete,
+  });
 
   final MeditationLogEntry entry;
+  final VoidCallback onEdit;
   final VoidCallback onDelete;
 
   @override
@@ -544,6 +580,13 @@ class _LogEntryRow extends StatelessWidget {
                 ),
               ),
               IconButton(
+                key: ValueKey('edit-log-${entry.id}'),
+                onPressed: onEdit,
+                tooltip: 'Edit log',
+                color: Colors.white,
+                icon: const Icon(Icons.edit_outlined),
+              ),
+              IconButton(
                 key: ValueKey('delete-log-${entry.id}'),
                 onPressed: onDelete,
                 tooltip: 'Delete log',
@@ -559,26 +602,50 @@ class _LogEntryRow extends StatelessWidget {
 }
 
 class _LogEntryDialog extends StatefulWidget {
-  const _LogEntryDialog();
+  const _LogEntryDialog({this.entry});
+
+  final MeditationLogEntry? entry;
 
   @override
   State<_LogEntryDialog> createState() => _LogEntryDialogState();
 }
 
 class _LogEntryDialogState extends State<_LogEntryDialog> {
-  final TextEditingController _durationController = TextEditingController(
-    text: '0:20:0',
-  );
-  final TextEditingController _presetController = TextEditingController();
-  final TextEditingController _activityController = TextEditingController(
-    text: 'Meditation',
-  );
-  DateTime _startedAt = DateTime.now();
-  String? _errorText;
+  late final TextEditingController _hoursController;
+  late final TextEditingController _minutesController;
+  late final TextEditingController _secondsController;
+  late final TextEditingController _presetController;
+  late final TextEditingController _activityController;
+  late DateTime _startedAt;
+
+  bool get _isEditing => widget.entry != null;
+
+  @override
+  void initState() {
+    super.initState();
+    final entry = widget.entry;
+    final duration = entry?.duration ?? const Duration(minutes: 20);
+    _startedAt = entry?.startedAt ?? DateTime.now();
+    _hoursController = TextEditingController(text: duration.inHours.toString());
+    _minutesController = TextEditingController(
+      text: duration.inMinutes.remainder(60).toString(),
+    );
+    _secondsController = TextEditingController(
+      text: duration.inSeconds.remainder(60).toString(),
+    );
+    _presetController = TextEditingController(text: entry?.preset ?? '');
+    _activityController = TextEditingController(
+      text: entry?.activity.trim().isEmpty ?? true
+          ? 'Meditation'
+          : entry!.activity,
+    );
+  }
 
   @override
   void dispose() {
-    _durationController.dispose();
+    _hoursController.dispose();
+    _minutesController.dispose();
+    _secondsController.dispose();
     _presetController.dispose();
     _activityController.dispose();
     super.dispose();
@@ -607,18 +674,47 @@ class _LogEntryDialogState extends State<_LogEntryDialog> {
     });
   }
 
-  void _submit() {
-    final duration = _parseLogDuration(_durationController.text);
-    if (duration == null) {
-      setState(() {
-        _errorText = 'Use h:m:s duration format';
-      });
+  Future<void> _pickStartedAtTime() async {
+    final pickedTime = await showTimePicker(
+      context: context,
+      initialTime: TimeOfDay.fromDateTime(_startedAt),
+    );
+    if (pickedTime == null) {
       return;
     }
 
+    setState(() {
+      _startedAt = DateTime(
+        _startedAt.year,
+        _startedAt.month,
+        _startedAt.day,
+        pickedTime.hour,
+        pickedTime.minute,
+        _startedAt.second,
+      );
+    });
+  }
+
+  Duration _durationFromFields() {
+    final hours = _nonNegativeIntFromController(_hoursController);
+    final minutes = _nonNegativeIntFromController(_minutesController);
+    final seconds = _nonNegativeIntFromController(_secondsController);
+    return Duration(hours: hours, minutes: minutes, seconds: seconds);
+  }
+
+  void _normalizeDurationFields() {
+    final duration = _durationFromFields();
+    _hoursController.text = duration.inHours.toString();
+    _minutesController.text = duration.inMinutes.remainder(60).toString();
+    _secondsController.text = duration.inSeconds.remainder(60).toString();
+  }
+
+  void _submit() {
+    final duration = _durationFromFields();
+
     Navigator.of(context).pop(
       MeditationLogEntry(
-        id: _newLogId(),
+        id: widget.entry?.id ?? _newLogId(),
         startedAt: _startedAt,
         duration: duration,
         preset: _presetController.text.trim(),
@@ -633,31 +729,83 @@ class _LogEntryDialogState extends State<_LogEntryDialog> {
   Widget build(BuildContext context) {
     return AlertDialog(
       backgroundColor: _homeSurfaceColor,
-      title: const Text('Add log entry'),
+      title: Text(_isEditing ? 'Edit log entry' : 'Add log entry'),
       content: SingleChildScrollView(
         child: Column(
           mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            if (_errorText != null) ...[
-              Text(
-                _errorText!,
-                style: const TextStyle(color: Color(0xFFE06A6A)),
-              ),
-              const SizedBox(height: 8),
-            ],
-            SizedBox(
-              width: double.infinity,
-              child: OutlinedButton(
-                key: const ValueKey('log-started-at-date-button'),
-                onPressed: _pickStartedAtDate,
-                child: Text(_formatCsvDateTime(_startedAt)),
+            const Text(
+              'Started at',
+              style: TextStyle(
+                color: _mutedTextColor,
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                letterSpacing: 0,
               ),
             ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    key: const ValueKey('log-started-at-date-button'),
+                    onPressed: _pickStartedAtDate,
+                    icon: const Icon(Icons.calendar_today_outlined, size: 18),
+                    label: Text(_formatDateOnly(_startedAt)),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: OutlinedButton.icon(
+                    key: const ValueKey('log-started-at-time-button'),
+                    onPressed: _pickStartedAtTime,
+                    icon: const Icon(Icons.schedule_rounded, size: 18),
+                    label: Text(_formatTimeOnly(_startedAt)),
+                  ),
+                ),
+              ],
+            ),
             const SizedBox(height: 12),
-            TextField(
-              key: const ValueKey('log-duration-field'),
-              controller: _durationController,
-              decoration: const InputDecoration(labelText: 'Duration'),
+            const Text(
+              'Duration',
+              style: TextStyle(
+                color: _mutedTextColor,
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                letterSpacing: 0,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Expanded(
+                  child: _LogDurationField(
+                    keyName: 'log-duration-hours-field',
+                    label: 'Hours',
+                    controller: _hoursController,
+                    onEditingComplete: _normalizeDurationFields,
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: _LogDurationField(
+                    keyName: 'log-duration-minutes-field',
+                    label: 'Minutes',
+                    controller: _minutesController,
+                    onEditingComplete: _normalizeDurationFields,
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: _LogDurationField(
+                    keyName: 'log-duration-seconds-field',
+                    label: 'Seconds',
+                    controller: _secondsController,
+                    onEditingComplete: _normalizeDurationFields,
+                  ),
+                ),
+              ],
             ),
             TextField(
               key: const ValueKey('log-preset-field'),
@@ -680,37 +828,52 @@ class _LogEntryDialogState extends State<_LogEntryDialog> {
         TextButton(
           key: const ValueKey('confirm-add-log-button'),
           onPressed: _submit,
-          child: const Text('Add'),
+          child: Text(_isEditing ? 'Save' : 'Add'),
         ),
       ],
     );
   }
 }
 
-Duration? _parseLogDuration(String value) {
-  final parts = value.split(':');
-  if (parts.length != 3) {
-    return null;
+class _LogDurationField extends StatelessWidget {
+  const _LogDurationField({
+    required this.keyName,
+    required this.label,
+    required this.controller,
+    required this.onEditingComplete,
+  });
+
+  final String keyName;
+  final String label;
+  final TextEditingController controller;
+  final VoidCallback onEditingComplete;
+
+  @override
+  Widget build(BuildContext context) {
+    return TextField(
+      key: ValueKey(keyName),
+      controller: controller,
+      keyboardType: TextInputType.number,
+      textInputAction: TextInputAction.next,
+      onEditingComplete: onEditingComplete,
+      decoration: InputDecoration(labelText: label),
+    );
   }
+}
 
-  final hours = int.tryParse(parts[0].trim());
-  final minutes = int.tryParse(parts[1].trim());
-  final seconds = int.tryParse(parts[2].trim());
-
-  if (hours == null ||
-      minutes == null ||
-      seconds == null ||
-      hours < 0 ||
-      minutes < 0 ||
-      seconds < 0) {
-    return null;
-  }
-
-  return Duration(hours: hours, minutes: minutes, seconds: seconds);
+int _nonNegativeIntFromController(TextEditingController controller) {
+  final value = int.tryParse(controller.text.trim()) ?? 0;
+  return value < 0 ? 0 : value;
 }
 
 String _formatDateOnly(DateTime date) {
   final month = date.month.toString().padLeft(2, '0');
   final day = date.day.toString().padLeft(2, '0');
   return '$month/$day/${date.year}';
+}
+
+String _formatTimeOnly(DateTime date) {
+  final hour = date.hour.toString().padLeft(2, '0');
+  final minute = date.minute.toString().padLeft(2, '0');
+  return '$hour:$minute';
 }
