@@ -170,7 +170,8 @@ const _woodKnock = BellSound(
   name: 'Knock on wood',
   assetPath: '$_bellAssetRoot/wood-knock.mp3',
   tags: ['wood', 'short'],
-  info: 'Thank you to ripper351 on freesound.org',
+  info:
+      "Source: Freesound 'wood door knock.wav' by ripper351. License: Creative Commons 0 (CC0 1.0). Note: uploader says the original source was unknown.",
   url: 'https://freesound.org/people/ripper351/sounds/151088/',
 );
 
@@ -178,7 +179,8 @@ const _woodChoppingSnappy = BellSound(
   name: 'Snappy Wood Chopping',
   assetPath: '$_bellAssetRoot/wood-chopping-snappy.mp3',
   tags: ['wood', 'short'],
-  info: 'Thank you to Idezen on freesound.org',
+  info:
+      "Source: Freesound 'Wood - Chopping 1 snappy' by ldezem. License: Creative Commons 0 (CC0 1.0).",
   url: 'https://freesound.org/people/ldezem/sounds/386224/',
 );
 
@@ -186,7 +188,8 @@ const _bellVeryLong = BellSound(
   name: 'High and Long Meditation Bell',
   assetPath: '$_bellAssetRoot/bell-very-long.mp3',
   tags: ['bell', 'long'],
-  info: 'Thank you to fauxpress on freesound.org',
+  info:
+      "Source: Freesound 'Bell Meditation.mp3' by fauxpress. License: Creative Commons 0 (CC0 1.0).",
   url: 'https://freesound.org/people/fauxpress/sounds/42095/',
 );
 
@@ -194,7 +197,8 @@ const _bowlInG = BellSound(
   name: 'Meditation Bowl in G(ish)',
   assetPath: '$_bellAssetRoot/bowl-in-G-ish.mp3',
   tags: ['bowl', 'medium length'],
-  info: 'Thank you to Squidocto on freesound.org',
+  info:
+      "Source: Freesound 'bell-bowl G-ish.wav' by Squidocto. License: Creative Commons 0 (CC0 1.0).",
   url: 'https://freesound.org/people/Squidocto/sounds/255762/',
 );
 
@@ -202,7 +206,8 @@ const _bowlWahwah = BellSound(
   name: 'Wahwah Bowl',
   assetPath: '$_bellAssetRoot/bowl-wahwah.mp3',
   tags: ['bowl', 'medium length'],
-  info: 'Thank you to qubodup and Monkay on freesound.org',
+  info:
+      "Source: Freesound 'Gong Bell (monkay's Singing Bowl [modified])' by qubodup, derived from Monkay. License: Creative Commons 0 (CC0 1.0).",
   url: 'https://freesound.org/people/qubodup/sounds/169289/',
 );
 
@@ -210,7 +215,8 @@ const _bowlGong = BellSound(
   name: 'Gong Bowl',
   assetPath: '$_bellAssetRoot/bowl-gong.mp3',
   tags: ['bowl', 'medium length'],
-  info: 'Thank you to Zambolino on freesound.org, found on pixabay.com',
+  info:
+      "Source: Pixabay 'Singing Bowl Gong' by Zambolino. License: Pixabay Content License.",
   url:
       'https://pixabay.com/sound-effects/film-special-effects-singing-bowl-gong-69238/',
 );
@@ -219,7 +225,8 @@ const _bowlHardStruck = BellSound(
   name: 'Hard-Struck Bowl in E-flat',
   assetPath: '$_bellAssetRoot/bowl-hard-struck.mp3',
   tags: ['bowl', 'medium length'],
-  info: 'Thank you to mttvn on freesound.org',
+  info:
+      "Source: Freesound 'E flat Tibetan singing bowl struck' by mttvn. License: Creative Commons 0 (CC0 1.0).",
   url: 'https://freesound.org/people/mttvn/sounds/535950/',
 );
 
@@ -227,8 +234,9 @@ const _bowlLowAndLong = BellSound(
   name: 'Low and Long Singing Bowl',
   assetPath: '$_bellAssetRoot/bowl-low-and-long.mp3',
   tags: ['bowl', 'long'],
-  info: 'Thank you to mttvn on freesound.org',
-  url: 'https://freesound.org/people/mttvn/sounds/535950/',
+  info:
+      "Source: Freesound 'singing bell hit 2.wav' by ryancacophony. License: Creative Commons 0 (CC0 1.0).",
+  url: 'https://freesound.org/people/ryancacophony/sounds/202017/',
 );
 
 const _bellSounds = [

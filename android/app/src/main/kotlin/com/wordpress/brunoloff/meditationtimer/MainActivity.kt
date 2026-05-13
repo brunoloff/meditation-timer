@@ -1,4 +1,4 @@
-package com.breathandinsight.breath_and_insight_timer
+package com.wordpress.brunoloff.meditationtimer
 
 import io.flutter.embedding.android.FlutterActivity
 

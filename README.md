@@ -1,5 +1,8 @@
 # Bruno's Meditation Timer
 
+Bruno's Meditation Timer is licensed under the GNU General Public License,
+version 3. See [LICENSE](LICENSE).
+
 A cross-platform meditation timer for Android and iOS.
 
 ## Getting Started
