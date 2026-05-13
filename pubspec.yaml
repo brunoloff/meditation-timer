@@ -41,6 +41,8 @@ dependencies:
   url_launcher: ^6.3.1
   wakelock_plus: ^1.6.0
   file_selector: ^1.1.0
+  file_picker: ^12.0.0-beta.1
+  shared_preferences_android: ^2.4.23
 
 dev_dependencies:
   flutter_test:
@@ -52,6 +54,7 @@ dev_dependencies:
   # package. See that file for information about deactivating specific lint
   # rules and activating additional ones.
   flutter_lints: ^6.0.0
+  shared_preferences_platform_interface: ^2.4.2
 
 dependency_overrides:
   matcher: ^0.12.20

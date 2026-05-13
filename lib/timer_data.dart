@@ -21,6 +21,7 @@ const _soundEnabledKey = 'soundEnabled';
 const _turnScreenOnNearAudioKey = 'turnScreenOnNearAudio';
 const _timerEntriesKey = 'timerEntries';
 const _meditationLogsKey = 'meditationLogs';
+const _legacyAndroidLogsMigrationKey = 'legacyAndroidLogsMigrated';
 const _bellAssetRoot = 'audio/bells';
 
 class BellSound {
@@ -216,7 +217,7 @@ const _bowlGong = BellSound(
   assetPath: '$_bellAssetRoot/bowl-gong.mp3',
   tags: ['bowl', 'medium length'],
   info:
-      "Source: Pixabay 'Singing Bowl Gong' by Zambolino. License: Pixabay Content License.",
+      "Source: Pixabay 'Singing Bowl Gong' by Zambolino. License: Pixabay Content License. Bundled as an app bell sound, not distributed as standalone content.",
   url:
       'https://pixabay.com/sound-effects/film-special-effects-singing-bowl-gong-69238/',
 );

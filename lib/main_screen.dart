@@ -230,31 +230,24 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _exportLogsCsv() async {
     try {
       final csvText = await _logStore.exportCsv();
-      final saveLocation = await getSaveLocation(
-        suggestedName: 'breath-and-insight-logs.csv',
-        acceptedTypeGroups: const <XTypeGroup>[
-          XTypeGroup(label: 'CSV', extensions: <String>['csv']),
-        ],
+      final savedPath = await FilePicker.saveFile(
+        dialogTitle: 'Export meditation logs',
+        fileName: 'breath-and-insight-logs.csv',
+        type: FileType.custom,
+        allowedExtensions: const ['csv'],
+        bytes: Uint8List.fromList(utf8.encode(csvText)),
       );
-      if (saveLocation == null) {
-        return;
-      }
-
-      final outputFile = XFile.fromData(
-        Uint8List.fromList(utf8.encode(csvText)),
-        mimeType: 'text/csv',
-        name: 'breath-and-insight-logs.csv',
-      );
-      await outputFile.saveTo(saveLocation.path);
 
       if (!mounted) {
         return;
       }
 
-      _showMessage('Exported meditation logs.');
-    } on Object {
+      if (kIsWeb || savedPath != null) {
+        _showMessage('Exported meditation logs.');
+      }
+    } on Object catch (error) {
       if (mounted) {
-        _showMessage('Could not export meditation logs.');
+        _showMessage('Could not export meditation logs: $error');
       }
     }
   }
@@ -329,31 +322,24 @@ class _HomeScreenState extends State<HomeScreen> {
           pranayamaEntries: _pranayamaEntries,
         ),
       );
-      final saveLocation = await getSaveLocation(
-        suggestedName: 'breath-and-insight-presets.json',
-        acceptedTypeGroups: const <XTypeGroup>[
-          XTypeGroup(label: 'JSON', extensions: <String>['json']),
-        ],
+      final savedPath = await FilePicker.saveFile(
+        dialogTitle: 'Export presets',
+        fileName: 'breath-and-insight-presets.json',
+        type: FileType.custom,
+        allowedExtensions: const ['json'],
+        bytes: Uint8List.fromList(utf8.encode(jsonText)),
       );
-      if (saveLocation == null) {
-        return;
-      }
-
-      final outputFile = XFile.fromData(
-        Uint8List.fromList(utf8.encode(jsonText)),
-        mimeType: 'application/json',
-        name: 'breath-and-insight-presets.json',
-      );
-      await outputFile.saveTo(saveLocation.path);
 
       if (!mounted) {
         return;
       }
 
-      _showMessage('Exported presets.');
-    } on Object {
+      if (kIsWeb || savedPath != null) {
+        _showMessage('Exported presets.');
+      }
+    } on Object catch (error) {
       if (mounted) {
-        _showMessage('Could not export presets.');
+        _showMessage('Could not export presets: $error');
       }
     }
   }

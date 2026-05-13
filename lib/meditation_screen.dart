@@ -783,6 +783,7 @@ class _PausedControls extends StatelessWidget {
           width: double.infinity,
           height: 56,
           child: FilledButton(
+            key: const ValueKey('finish-with-bell-button'),
             onPressed: onFinishWithBell,
             style: FilledButton.styleFrom(
               backgroundColor: Colors.white,
@@ -808,6 +809,7 @@ class _PausedControls extends StatelessWidget {
           width: double.infinity,
           height: 52,
           child: OutlinedButton(
+            key: const ValueKey('finish-without-bell-button'),
             onPressed: onFinishWithoutBell,
             style: OutlinedButton.styleFrom(
               foregroundColor: Colors.white,
@@ -830,6 +832,7 @@ class _PausedControls extends StatelessWidget {
         ),
         const SizedBox(height: 14),
         TextButton(
+          key: const ValueKey('discard-session-button'),
           onPressed: onDiscard,
           style: TextButton.styleFrom(
             foregroundColor: Colors.white,

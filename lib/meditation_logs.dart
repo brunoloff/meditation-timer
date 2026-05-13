@@ -38,7 +38,8 @@ class MeditationLogStore {
   static const int defaultPageSize = 50;
 
   Future<void> append(MeditationLogEntry entry) async {
-    final entries = List<MeditationLogEntry>.of(await _loadAll());
+    await _migrateLegacyAndroidLogsIfNeeded();
+    final entries = List<MeditationLogEntry>.of(await _loadAllAsync());
     entries.insert(0, entry);
     await _saveAll(entries);
   }
@@ -49,8 +50,9 @@ class MeditationLogStore {
     int offset = 0,
     int limit = defaultPageSize,
   }) async {
+    await _migrateLegacyAndroidLogsIfNeeded();
     final entries = _filterEntries(
-      await _loadAll(),
+      await _loadAllAsync(),
       startDate: startDate,
       endDate: endDate,
     );
@@ -69,7 +71,8 @@ class MeditationLogStore {
     required List<MeditationLogEntry> additions,
     required Set<String> deletedIds,
   }) async {
-    final existingEntries = await _loadAll();
+    await _migrateLegacyAndroidLogsIfNeeded();
+    final existingEntries = await _loadAllAsync();
     final updatedEntries = [
       ...additions,
       for (final entry in existingEntries)
@@ -80,8 +83,9 @@ class MeditationLogStore {
   }
 
   Future<LogImportResult> importCsv(String csvText) async {
+    await _migrateLegacyAndroidLogsIfNeeded();
     final parsedEntries = _decodeMeditationLogsCsv(csvText);
-    final existingEntries = await _loadAll();
+    final existingEntries = await _loadAllAsync();
     final existingKeys = {
       for (final entry in existingEntries) _logContentKey(entry),
     };
@@ -108,31 +112,99 @@ class MeditationLogStore {
   }
 
   Future<String> exportCsv() async {
-    return _encodeMeditationLogsCsv(await _loadAll());
+    await _migrateLegacyAndroidLogsIfNeeded();
+    return _encodeMeditationLogsCsv(await _loadAllAsync());
   }
 
   Future<List<MeditationLogEntry>> allEntries() async {
-    return _loadAll();
+    await _migrateLegacyAndroidLogsIfNeeded();
+    return _loadAllAsync();
   }
 
   Future<void> purgeAll() async {
+    await _migrateLegacyAndroidLogsIfNeeded();
+    await _asyncPreferences().remove(_meditationLogsKey);
     final preferences = await SharedPreferences.getInstance();
     await preferences.remove(_meditationLogsKey);
   }
 
-  Future<List<MeditationLogEntry>> _loadAll() async {
+  Future<List<MeditationLogEntry>> _loadAllAsync() async {
+    final encodedAsyncLogs = await _asyncPreferences().getString(
+      _meditationLogsKey,
+    );
+    final asyncLogs = _decodeMeditationLogs(encodedAsyncLogs);
+    if (asyncLogs.isNotEmpty) {
+      return asyncLogs;
+    }
+
     final preferences = await SharedPreferences.getInstance();
     final encodedLogs = preferences.getString(_meditationLogsKey);
     return _decodeMeditationLogs(encodedLogs);
   }
 
   Future<void> _saveAll(List<MeditationLogEntry> entries) async {
+    final encodedLogs = jsonEncode([
+      for (final entry in entries) _encodeMeditationLog(entry),
+    ]);
+    await _asyncPreferences().setString(_meditationLogsKey, encodedLogs);
     final preferences = await SharedPreferences.getInstance();
-    await preferences.setString(
-      _meditationLogsKey,
-      jsonEncode([for (final entry in entries) _encodeMeditationLog(entry)]),
+    await preferences.setString(_meditationLogsKey, encodedLogs);
+  }
+}
+
+Future<void> _migrateLegacyAndroidLogsIfNeeded() async {
+  final preferences = await SharedPreferences.getInstance();
+  final asyncPreferences = _asyncPreferences();
+  final asyncMigrationDone =
+      await asyncPreferences.getBool(_legacyAndroidLogsMigrationKey) ?? false;
+  final legacyMigrationDone =
+      preferences.getBool(_legacyAndroidLogsMigrationKey) ?? false;
+  if (asyncMigrationDone && legacyMigrationDone) {
+    return;
+  }
+
+  if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) {
+    await asyncPreferences.setBool(_legacyAndroidLogsMigrationKey, true);
+    await preferences.setBool(_legacyAndroidLogsMigrationKey, true);
+    return;
+  }
+
+  final currentLogs = [
+    ..._decodeMeditationLogs(
+      await asyncPreferences.getString(_meditationLogsKey),
+    ),
+    ..._decodeMeditationLogs(preferences.getString(_meditationLogsKey)),
+  ];
+  if (currentLogs.isNotEmpty) {
+    final mergedByContent = <String, MeditationLogEntry>{
+      for (final entry in currentLogs) _logContentKey(entry): entry,
+    };
+    final mergedLogs = mergedByContent.values.toList()
+      ..sort((a, b) => b.startedAt.compareTo(a.startedAt));
+    final encodedLogs = jsonEncode([
+      for (final entry in mergedLogs) _encodeMeditationLog(entry),
+    ]);
+    await asyncPreferences.setString(_meditationLogsKey, encodedLogs);
+    await preferences.setString(_meditationLogsKey, encodedLogs);
+  }
+
+  await asyncPreferences.setBool(_legacyAndroidLogsMigrationKey, true);
+  await preferences.setBool(_legacyAndroidLogsMigrationKey, true);
+}
+
+SharedPreferencesAsync _asyncPreferences() {
+  if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
+    return SharedPreferencesAsync(
+      options: const SharedPreferencesAsyncAndroidOptions(
+        backend: SharedPreferencesAndroidBackendLibrary.SharedPreferences,
+        originalSharedPreferencesOptions: AndroidSharedPreferencesStoreOptions(
+          fileName: 'FlutterSharedPreferences',
+        ),
+      ),
     );
   }
+
+  return SharedPreferencesAsync();
 }
 
 class LogQueryResult {

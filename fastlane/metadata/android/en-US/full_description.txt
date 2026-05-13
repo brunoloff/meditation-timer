@@ -1,14 +1,14 @@
 Bruno's Meditation Timer is a simple, offline meditation and pranayama timer.
 
 Features:
-
-* Meditation presets with optional starting, intermediate, and ending bells.
-* Infinite and timed meditation sessions.
-* Pranayama presets with smooth visual guidance and generated breath tones.
-* Session logging, CSV import/export, streak repair, and basic statistics.
-* Local preset import/export.
+* Meditation timer with custom presets, each with configurable starting, intermediate, and ending bells.
+* Pranayama timer with auditory and visual guidance and generated breath tones.
+* Session logging, CSV import/export, streak tracking with streak repair, and basic statistics.
+* Local preset import/export, import compatible with Insight Timer.
 * No account, ads, analytics, tracking, or network service is required for core use.
 
 The app was built for personal meditation practice: quiet defaults, minimal
 visual interruption during sessions, and enough structure to keep track of
 practice over time.
+
+I am happy to receive feature requests at the moment.

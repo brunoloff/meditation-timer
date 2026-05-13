@@ -1,1 +1,1 @@
-Meditation and pranayama timer with logs and stats
+Meditation and pranayama timer with streak tracking and other statistics.

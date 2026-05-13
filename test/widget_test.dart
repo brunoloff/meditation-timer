@@ -4,12 +4,16 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:shared_preferences_platform_interface/in_memory_shared_preferences_async.dart';
+import 'package:shared_preferences_platform_interface/shared_preferences_async_platform_interface.dart';
 
 import 'package:breath_and_insight_timer/main.dart';
 
 void main() {
   setUp(() {
     SharedPreferences.setMockInitialValues({});
+    SharedPreferencesAsyncPlatform.instance =
+        InMemorySharedPreferencesAsync.empty();
   });
 
   testWidgets('home screen opens on timers tab and can switch tabs', (
@@ -230,9 +234,7 @@ void main() {
 
     await tester.tap(find.byIcon(Icons.pause_rounded));
     await tester.pump();
-    await tester.tap(find.text('Log & Finish early (no bell)'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const ValueKey('summary-continue-button')));
+    await tester.tap(find.byKey(const ValueKey('discard-session-button')));
     await tester.pumpAndSettle();
 
     await tester.tap(find.byKey(const ValueKey('pranayama-tab-button')));
