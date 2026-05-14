@@ -1,0 +1,1 @@
+Fix Android log and preset export, improve log persistence during app upgrades, and prepare F-Droid release metadata.
