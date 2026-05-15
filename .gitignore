@@ -46,3 +46,6 @@ app.*.map.json
 /android/app/release
 InsightTimerLogs.csv
 breath-and-insight-logs.csv
+
+/fdroiddata/*
+/fdroidserver/*

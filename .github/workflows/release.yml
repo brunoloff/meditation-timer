@@ -1,0 +1,13 @@
+name: Release metadata
+
+on:
+  workflow_dispatch:
+
+env:
+  flutter-version: '3.41.9'
+
+jobs:
+  release-metadata:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Flutter version is ${{ env.flutter-version }}"
