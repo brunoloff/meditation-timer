@@ -166,9 +166,13 @@ class _PranayamaGuidePanel extends StatelessWidget {
             cycleProgress: 0,
           )
         : _phaseSnapshotForPranayama(preset!, elapsed);
-    final bpm = preset == null || preset!.cycleDuration == Duration.zero
+    final activeSegment = preset == null
+        ? null
+        : _pranayamaSegmentAtElapsed(preset!, elapsed).segment;
+    final activeCycleDuration = activeSegment?.cycleDuration ?? Duration.zero;
+    final bpm = preset == null || activeCycleDuration == Duration.zero
         ? 0.0
-        : 60 / preset!.cycleDuration.inMilliseconds * 1000;
+        : 60 / activeCycleDuration.inMilliseconds * 1000;
 
     return Material(
       color: const Color(0xFF13201F),
@@ -257,7 +261,8 @@ class _PranayamaGuidePanel extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                if (preset != null) _PranayamaTimingTable(preset: preset!),
+                if (activeSegment != null)
+                  _PranayamaTimingTable(segment: activeSegment),
                 if (preset != null) const SizedBox(height: 14),
                 Row(
                   children: [
@@ -294,9 +299,9 @@ class _PranayamaGuidePanel extends StatelessWidget {
 }
 
 class _PranayamaTimingTable extends StatelessWidget {
-  const _PranayamaTimingTable({required this.preset});
+  const _PranayamaTimingTable({required this.segment});
 
-  final PranayamaPreset preset;
+  final PranayamaSegment segment;
 
   @override
   Widget build(BuildContext context) {
@@ -313,10 +318,10 @@ class _PranayamaTimingTable extends StatelessWidget {
         const SizedBox(height: 8),
         Row(
           children: [
-            Expanded(child: _TimingValue(preset.inBreath)),
-            Expanded(child: _TimingValue(preset.firstHold)),
-            Expanded(child: _TimingValue(preset.outBreath)),
-            Expanded(child: _TimingValue(preset.secondHold)),
+            Expanded(child: _TimingValue(segment.inBreath)),
+            Expanded(child: _TimingValue(segment.firstHold)),
+            Expanded(child: _TimingValue(segment.outBreath)),
+            Expanded(child: _TimingValue(segment.secondHold)),
           ],
         ),
       ],
@@ -479,10 +484,15 @@ class _PranayamaPathGuide {
     required Duration elapsed,
     required Size size,
   }) {
-    final inBreath = preset?.inBreath ?? const Duration(seconds: 5);
-    final firstHold = preset?.firstHold ?? Duration.zero;
-    final outBreath = preset?.outBreath ?? const Duration(seconds: 6);
-    final secondHold = preset?.secondHold ?? Duration.zero;
+    final segmentPosition = preset == null
+        ? null
+        : _pranayamaSegmentAtElapsed(preset, elapsed);
+    final localElapsed = segmentPosition?.localElapsed ?? elapsed;
+    final segment = segmentPosition?.segment;
+    final inBreath = segment?.inBreath ?? const Duration(seconds: 5);
+    final firstHold = segment?.firstHold ?? Duration.zero;
+    final outBreath = segment?.outBreath ?? const Duration(seconds: 6);
+    final secondHold = segment?.secondHold ?? Duration.zero;
     final totalDuration = inBreath + firstHold + outBreath + secondHold;
     final totalMilliseconds = totalDuration.inMilliseconds <= 0
         ? 1
@@ -520,7 +530,7 @@ class _PranayamaPathGuide {
     );
     final trailingEnd = Offset(size.width, bottom);
 
-    final elapsedInCycle = elapsed.inMilliseconds % totalMilliseconds;
+    final elapsedInCycle = localElapsed.inMilliseconds % totalMilliseconds;
     final activeDot = _dotForElapsed(
       elapsedInCycle: elapsedInCycle,
       inBreath: inBreath,
@@ -537,8 +547,8 @@ class _PranayamaPathGuide {
         ? const <Offset>[]
         : _transitionDotsForElapsed(
             elapsedInCycle: elapsedInCycle,
-            elapsed: elapsed,
-            preset: preset,
+            elapsed: localElapsed,
+            effectiveDuration: _effectivePranayamaSegmentDuration(segment!),
             totalMilliseconds: totalMilliseconds,
             leadDurationMilliseconds: _pranayamaLeadDuration.inMilliseconds,
             leadingStart: leadingStart,
@@ -563,7 +573,7 @@ class _PranayamaPathGuide {
   static List<Offset> _transitionDotsForElapsed({
     required int elapsedInCycle,
     required Duration elapsed,
-    required PranayamaPreset preset,
+    required Duration? effectiveDuration,
     required int totalMilliseconds,
     required int leadDurationMilliseconds,
     required Offset leadingStart,
@@ -582,7 +592,6 @@ class _PranayamaPathGuide {
       dots.add(Offset.lerp(end, trailingEnd, progress)!);
     }
 
-    final effectiveDuration = _effectivePranayamaDuration(preset);
     final isLastCycle =
         effectiveDuration != null &&
         cycleIndex >= effectiveDuration.inMilliseconds ~/ totalMilliseconds - 1;
@@ -734,7 +743,7 @@ class _EditablePranayamaBrowser extends StatelessWidget {
       physics: const NeverScrollableScrollPhysics(),
       buildDefaultDragHandles: false,
       itemCount: rows.length,
-      onReorder: onReorder,
+      onReorderItem: onReorder,
       itemBuilder: (context, index) {
         final row = rows[index];
 
@@ -1000,17 +1009,12 @@ class PranayamaEditScreen extends StatefulWidget {
 
 class _PranayamaEditScreenState extends State<PranayamaEditScreen> {
   late String _presetName;
-  late bool _isInfinite;
   late final TextEditingController _noteController;
-  late final TextEditingController _hoursController;
-  late final TextEditingController _minutesController;
-  late final TextEditingController _secondsController;
-  late final TextEditingController _inBreathController;
-  late final TextEditingController _firstHoldController;
-  late final TextEditingController _outBreathController;
-  late final TextEditingController _secondHoldController;
+  late final List<_EditablePranayamaSegment> _segments;
   String? _errorText;
   bool _isNormalizingDurationFields = false;
+  bool _isEditingSegments = false;
+  int _nextSegmentId = 0;
 
   bool get _isCreating => widget.preset == null;
 
@@ -1019,41 +1023,22 @@ class _PranayamaEditScreenState extends State<PranayamaEditScreen> {
     super.initState();
     final preset = widget.preset;
     _presetName = preset?.name ?? 'New preset';
-    _isInfinite = preset?.isInfinite ?? false;
     _noteController = TextEditingController(text: preset?.note ?? '');
-
-    final duration = preset?.duration ?? const Duration(minutes: 10);
-    _hoursController = TextEditingController(text: duration.inHours.toString());
-    _minutesController = TextEditingController(
-      text: duration.inMinutes.remainder(60).toString().padLeft(2, '0'),
-    );
-    _secondsController = TextEditingController(
-      text: duration.inSeconds.remainder(60).toString().padLeft(2, '0'),
-    );
-    _inBreathController = TextEditingController(
-      text: (preset?.inBreath.inSeconds ?? 5).toString(),
-    );
-    _firstHoldController = TextEditingController(
-      text: (preset?.firstHold.inSeconds ?? 0).toString(),
-    );
-    _outBreathController = TextEditingController(
-      text: (preset?.outBreath.inSeconds ?? 6).toString(),
-    );
-    _secondHoldController = TextEditingController(
-      text: (preset?.secondHold.inSeconds ?? 0).toString(),
-    );
+    _segments = [
+      for (final segment in preset?.segments ?? [_defaultPranayamaSegment()])
+        _EditablePranayamaSegment.fromSegment(
+          id: 'editable-pranayama-segment-${_nextSegmentId++}',
+          segment: segment,
+        ),
+    ];
   }
 
   @override
   void dispose() {
     _noteController.dispose();
-    _hoursController.dispose();
-    _minutesController.dispose();
-    _secondsController.dispose();
-    _inBreathController.dispose();
-    _firstHoldController.dispose();
-    _outBreathController.dispose();
-    _secondHoldController.dispose();
+    for (final segment in _segments) {
+      segment.dispose();
+    }
     super.dispose();
   }
 
@@ -1149,68 +1134,174 @@ class _PranayamaEditScreenState extends State<PranayamaEditScreen> {
       return;
     }
 
-    final inBreath = _secondsDurationFromController(
-      _inBreathController,
-      enforceMinimum: true,
-    );
-    final firstHold = _secondsDurationFromController(_firstHoldController);
-    final outBreath = _secondsDurationFromController(
-      _outBreathController,
-      enforceMinimum: true,
-    );
-    final secondHold = _secondsDurationFromController(_secondHoldController);
-    final duration = _isInfinite
-        ? null
-        : _normalizeDurationFields(enforceMinimum: true);
+    if (_segments.isEmpty) {
+      setState(() {
+        _segments.add(_newEditablePranayamaSegment());
+      });
+    }
+
+    final savedSegments = <PranayamaSegment>[];
+    for (var index = 0; index < _segments.length; index += 1) {
+      savedSegments.add(
+        _segmentFromControllers(
+          _segments[index],
+          isLast: index == _segments.length - 1,
+          enforceMinimumDuration: true,
+        ),
+      );
+    }
 
     Navigator.of(context).pop(
       PranayamaPreset(
         id: widget.preset?.id ?? _newPranayamaPresetId(),
         name: trimmedName,
         note: _noteController.text.trim(),
-        duration: duration,
-        inBreath: inBreath,
-        firstHold: firstHold,
-        outBreath: outBreath,
-        secondHold: secondHold,
+        segments: savedSegments,
       ),
     );
   }
 
-  Duration? _normalizeDurationFields({bool enforceMinimum = false}) {
+  void _addSegment() {
+    setState(() {
+      _isEditingSegments = true;
+      _segments.add(_newEditablePranayamaSegment());
+    });
+  }
+
+  void _toggleSegmentEditing() {
+    setState(() {
+      _isEditingSegments = !_isEditingSegments;
+    });
+  }
+
+  void _deleteSegment(String id) {
+    if (_segments.length <= 1) {
+      setState(() {
+        _errorText = 'A preset needs at least one segment';
+      });
+      return;
+    }
+
+    setState(() {
+      final index = _segments.indexWhere((segment) => segment.id == id);
+      if (index == -1) {
+        return;
+      }
+      _segments.removeAt(index).dispose();
+      _errorText = null;
+    });
+  }
+
+  void _reorderSegment(int oldIndex, int newIndex) {
+    setState(() {
+      final segment = _segments.removeAt(oldIndex);
+      _segments.insert(newIndex, segment);
+      _errorText = null;
+    });
+  }
+
+  _EditablePranayamaSegment _newEditablePranayamaSegment() {
+    return _EditablePranayamaSegment.fromSegment(
+      id: 'new-pranayama-segment-${DateTime.now().microsecondsSinceEpoch}-${_nextSegmentId++}',
+      segment: _defaultPranayamaSegment(),
+    );
+  }
+
+  PranayamaSegment _segmentFromControllers(
+    _EditablePranayamaSegment segment, {
+    required bool isLast,
+    bool enforceMinimumDuration = false,
+  }) {
+    final duration = !isLast || !segment.isInfinite
+        ? _normalizeDurationFields(
+            segment,
+            enforceMinimum: enforceMinimumDuration,
+          )
+        : null;
+    final inBreath = _secondsDurationFromController(
+      segment.inBreathController,
+      enforceMinimum: true,
+    );
+    final firstHold = _secondsDurationFromController(
+      segment.firstHoldController,
+    );
+    final outBreath = _secondsDurationFromController(
+      segment.outBreathController,
+      enforceMinimum: true,
+    );
+    final secondHold = _secondsDurationFromController(
+      segment.secondHoldController,
+    );
+
+    return PranayamaSegment(
+      id: segment.segmentId,
+      duration: duration,
+      inBreath: inBreath,
+      firstHold: firstHold,
+      outBreath: outBreath,
+      secondHold: secondHold,
+    );
+  }
+
+  Duration? _normalizeDurationFields(
+    _EditablePranayamaSegment segment, {
+    bool enforceMinimum = false,
+  }) {
     if (_isNormalizingDurationFields) {
       return null;
     }
 
     // Accept forgiving input (for example 90 minutes) and immediately fold it
     // back into canonical hh:mm:ss fields. This mirrors the timer editor.
-    final duration = Duration(
-      hours: _nonNegativeFieldValue(_hoursController),
-      minutes: _nonNegativeFieldValue(_minutesController),
-      seconds: _nonNegativeFieldValue(_secondsController),
-    );
+    final hours = _nonNegativeFieldValue(segment.hoursController);
+    final minutes = _nonNegativeFieldValue(segment.minutesController);
+    final seconds = _nonNegativeFieldValue(segment.secondsController);
+    final duration = Duration(hours: hours, minutes: minutes, seconds: seconds);
 
     if (duration.inHours > 999) {
-      // Very large finite breath sessions are not useful to edit by hand; flip
-      // to the explicit infinite duration state.
-      setState(() {
-        _isInfinite = true;
-        _errorText = null;
-      });
-      return null;
+      if (identical(segment, _segments.last)) {
+        // Very large finite breath sessions are not useful to edit by hand; flip
+        // the last segment to the explicit infinite duration state.
+        setState(() {
+          segment.isInfinite = true;
+          _errorText = null;
+        });
+        return null;
+      }
+
+      _updateDurationFields(segment, const Duration(hours: 999));
+      return const Duration(hours: 999);
     }
 
     final normalizedDuration = enforceMinimum && duration == Duration.zero
         ? const Duration(seconds: 1)
         : duration;
 
-    _updateDurationFields(normalizedDuration);
+    if (enforceMinimum ||
+        !_hasBlankDurationField(
+              segment.hoursController,
+              segment.minutesController,
+              segment.secondsController,
+            ) &&
+            (minutes >= 60 || seconds >= 60)) {
+      _updateDurationFields(segment, normalizedDuration);
+    }
     return normalizedDuration;
   }
 
   int _nonNegativeFieldValue(TextEditingController controller) {
     final value = int.tryParse(controller.text.trim()) ?? 0;
     return value < 0 ? 0 : value;
+  }
+
+  bool _hasBlankDurationField(
+    TextEditingController hoursController,
+    TextEditingController minutesController,
+    TextEditingController secondsController,
+  ) {
+    return hoursController.text.trim().isEmpty ||
+        minutesController.text.trim().isEmpty ||
+        secondsController.text.trim().isEmpty;
   }
 
   Duration _secondsDurationFromController(
@@ -1223,15 +1314,18 @@ class _PranayamaEditScreenState extends State<PranayamaEditScreen> {
     return Duration(seconds: normalizedSeconds);
   }
 
-  void _updateDurationFields(Duration duration) {
+  void _updateDurationFields(
+    _EditablePranayamaSegment segment,
+    Duration duration,
+  ) {
     _isNormalizingDurationFields = true;
-    _setControllerText(_hoursController, duration.inHours.toString());
+    _setControllerText(segment.hoursController, duration.inHours.toString());
     _setControllerText(
-      _minutesController,
+      segment.minutesController,
       duration.inMinutes.remainder(60).toString().padLeft(2, '0'),
     );
     _setControllerText(
-      _secondsController,
+      segment.secondsController,
       duration.inSeconds.remainder(60).toString().padLeft(2, '0'),
     );
     _isNormalizingDurationFields = false;
@@ -1281,45 +1375,269 @@ class _PranayamaEditScreenState extends State<PranayamaEditScreen> {
                       const SizedBox(height: 16),
                       _NoteEditor(controller: _noteController),
                       const SizedBox(height: 24),
-                      _DurationEditor(
-                        isInfinite: _isInfinite,
-                        hoursController: _hoursController,
-                        minutesController: _minutesController,
-                        secondsController: _secondsController,
-                        onDurationChanged: () {
-                          _normalizeDurationFields();
-                        },
-                        onInfiniteChanged: (isInfinite) {
-                          setState(() {
-                            _isInfinite = isInfinite;
-                            _errorText = null;
-                          });
-                        },
+                      _SectionHeader(
+                        title: 'Segments',
+                        actions: [
+                          _HeaderAction(
+                            key: const ValueKey('add-pranayama-segment-button'),
+                            tooltip: 'Add segment',
+                            icon: const Icon(Icons.add_rounded),
+                            onPressed: _addSegment,
+                          ),
+                          _HeaderAction(
+                            key: const ValueKey(
+                              'edit-pranayama-segments-button',
+                            ),
+                            tooltip: _isEditingSegments
+                                ? 'Finish editing'
+                                : 'Edit',
+                            icon: Icon(
+                              _isEditingSegments
+                                  ? Icons.check_rounded
+                                  : Icons.edit_outlined,
+                            ),
+                            onPressed: _toggleSegmentEditing,
+                          ),
+                        ],
                       ),
-                      const SizedBox(height: 24),
-                      _PranayamaBreathEditor(
-                        inBreathController: _inBreathController,
-                        firstHoldController: _firstHoldController,
-                        outBreathController: _outBreathController,
-                        secondHoldController: _secondHoldController,
-                        onChanged: () {
-                          _secondsDurationFromController(
-                            _inBreathController,
-                            enforceMinimum: true,
-                          );
-                          _secondsDurationFromController(_firstHoldController);
-                          _secondsDurationFromController(
-                            _outBreathController,
-                            enforceMinimum: true,
-                          );
-                          _secondsDurationFromController(_secondHoldController);
-                        },
-                      ),
+                      const SizedBox(height: 12),
+                      if (_isEditingSegments)
+                        ReorderableListView.builder(
+                          key: const ValueKey(
+                            'editable-pranayama-segments-list',
+                          ),
+                          shrinkWrap: true,
+                          physics: const NeverScrollableScrollPhysics(),
+                          buildDefaultDragHandles: false,
+                          itemCount: _segments.length,
+                          onReorderItem: _reorderSegment,
+                          itemBuilder: (context, index) {
+                            final segment = _segments[index];
+                            return KeyedSubtree(
+                              key: ValueKey('editable-${segment.id}'),
+                              child: _PranayamaSegmentEditor(
+                                index: index,
+                                segment: segment,
+                                isLast: index == _segments.length - 1,
+                                isEditing: true,
+                                onDurationChanged: () {
+                                  _normalizeDurationFields(segment);
+                                },
+                                onInfiniteChanged: (isInfinite) {
+                                  setState(() {
+                                    segment.isInfinite = isInfinite;
+                                    _errorText = null;
+                                  });
+                                },
+                                onBreathChanged: () {
+                                  _normalizeBreathFields(segment);
+                                },
+                                onDelete: _segments.length <= 1
+                                    ? null
+                                    : () => _deleteSegment(segment.id),
+                                dragHandle: ReorderableDragStartListener(
+                                  key: ValueKey(
+                                    'drag-handle-pranayama-segment-${segment.id}',
+                                  ),
+                                  index: index,
+                                  child: const Icon(
+                                    Icons.drag_handle_rounded,
+                                    color: Colors.white,
+                                    size: 28,
+                                  ),
+                                ),
+                              ),
+                            );
+                          },
+                        )
+                      else
+                        for (
+                          var index = 0;
+                          index < _segments.length;
+                          index += 1
+                        )
+                          _PranayamaSegmentEditor(
+                            index: index,
+                            segment: _segments[index],
+                            isLast: index == _segments.length - 1,
+                            isEditing: false,
+                            onDurationChanged: () {
+                              _normalizeDurationFields(_segments[index]);
+                            },
+                            onInfiniteChanged: (isInfinite) {
+                              setState(() {
+                                _segments[index].isInfinite = isInfinite;
+                                _errorText = null;
+                              });
+                            },
+                            onBreathChanged: () {
+                              _normalizeBreathFields(_segments[index]);
+                            },
+                          ),
                       const SizedBox(height: 520),
                     ],
                   ),
                 ),
               ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _normalizeBreathFields(_EditablePranayamaSegment _) {
+    // Breath phase fields are plain second counts, so there is nothing to carry
+    // while typing. Final save still parses and clamps them, but leaving this as
+    // a no-op lets users erase the last digit before entering a replacement.
+  }
+}
+
+PranayamaSegment _defaultPranayamaSegment() {
+  return PranayamaSegment(
+    id: 'segment-${DateTime.now().microsecondsSinceEpoch}',
+    duration: const Duration(minutes: 10),
+    inBreath: const Duration(seconds: 5),
+    firstHold: Duration.zero,
+    outBreath: const Duration(seconds: 6),
+    secondHold: Duration.zero,
+  );
+}
+
+class _EditablePranayamaSegment {
+  _EditablePranayamaSegment.fromSegment({
+    required this.id,
+    required PranayamaSegment segment,
+  }) : segmentId = segment.id,
+       isInfinite = segment.isInfinite,
+       hoursController = TextEditingController(
+         text: (segment.duration ?? const Duration(minutes: 10)).inHours
+             .toString(),
+       ),
+       minutesController = TextEditingController(
+         text: (segment.duration ?? const Duration(minutes: 10)).inMinutes
+             .remainder(60)
+             .toString()
+             .padLeft(2, '0'),
+       ),
+       secondsController = TextEditingController(
+         text: (segment.duration ?? const Duration(minutes: 10)).inSeconds
+             .remainder(60)
+             .toString()
+             .padLeft(2, '0'),
+       ),
+       inBreathController = TextEditingController(
+         text: segment.inBreath.inSeconds.toString(),
+       ),
+       firstHoldController = TextEditingController(
+         text: segment.firstHold.inSeconds.toString(),
+       ),
+       outBreathController = TextEditingController(
+         text: segment.outBreath.inSeconds.toString(),
+       ),
+       secondHoldController = TextEditingController(
+         text: segment.secondHold.inSeconds.toString(),
+       );
+
+  final String id;
+  final String segmentId;
+  bool isInfinite;
+  final TextEditingController hoursController;
+  final TextEditingController minutesController;
+  final TextEditingController secondsController;
+  final TextEditingController inBreathController;
+  final TextEditingController firstHoldController;
+  final TextEditingController outBreathController;
+  final TextEditingController secondHoldController;
+
+  void dispose() {
+    hoursController.dispose();
+    minutesController.dispose();
+    secondsController.dispose();
+    inBreathController.dispose();
+    firstHoldController.dispose();
+    outBreathController.dispose();
+    secondHoldController.dispose();
+  }
+}
+
+class _PranayamaSegmentEditor extends StatelessWidget {
+  const _PranayamaSegmentEditor({
+    required this.index,
+    required this.segment,
+    required this.isLast,
+    required this.isEditing,
+    required this.onDurationChanged,
+    required this.onInfiniteChanged,
+    required this.onBreathChanged,
+    this.onDelete,
+    this.dragHandle,
+  });
+
+  final int index;
+  final _EditablePranayamaSegment segment;
+  final bool isLast;
+  final bool isEditing;
+  final VoidCallback onDurationChanged;
+  final ValueChanged<bool> onInfiniteChanged;
+  final VoidCallback onBreathChanged;
+  final VoidCallback? onDelete;
+  final Widget? dragHandle;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 14),
+      child: _TimerEditPanel(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    'Segment ${index + 1}',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 18,
+                      fontWeight: FontWeight.w600,
+                      letterSpacing: 0,
+                    ),
+                  ),
+                ),
+                if (isEditing) ...[
+                  IconButton(
+                    key: ValueKey('delete-pranayama-segment-${segment.id}'),
+                    onPressed: onDelete,
+                    tooltip: 'Delete segment',
+                    color: const Color(0xFFE06A6A),
+                    disabledColor: const Color(0xFF6A4444),
+                    icon: const Icon(Icons.delete_outline),
+                  ),
+                  ?dragHandle,
+                ],
+              ],
+            ),
+            const SizedBox(height: 14),
+            _DurationEditor(
+              title: 'Segment duration',
+              isInfinite: isLast && segment.isInfinite,
+              hoursController: segment.hoursController,
+              minutesController: segment.minutesController,
+              secondsController: segment.secondsController,
+              onDurationChanged: onDurationChanged,
+              onInfiniteChanged: onInfiniteChanged,
+              showInfiniteToggle: isLast,
+              wrapInPanel: false,
+            ),
+            const SizedBox(height: 14),
+            _PranayamaBreathEditor(
+              inBreathController: segment.inBreathController,
+              firstHoldController: segment.firstHoldController,
+              outBreathController: segment.outBreathController,
+              secondHoldController: segment.secondHoldController,
+              onChanged: onBreathChanged,
+              wrapInPanel: false,
             ),
           ],
         ),
@@ -1335,6 +1653,7 @@ class _PranayamaBreathEditor extends StatelessWidget {
     required this.outBreathController,
     required this.secondHoldController,
     required this.onChanged,
+    this.wrapInPanel = true,
   });
 
   final TextEditingController inBreathController;
@@ -1342,73 +1661,78 @@ class _PranayamaBreathEditor extends StatelessWidget {
   final TextEditingController outBreathController;
   final TextEditingController secondHoldController;
   final VoidCallback onChanged;
+  final bool wrapInPanel;
 
   @override
   Widget build(BuildContext context) {
-    return _TimerEditPanel(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          const Text(
-            'Breath cycle',
-            style: TextStyle(
-              color: Colors.white,
-              fontSize: 18,
-              fontWeight: FontWeight.w600,
-              letterSpacing: 0,
+    final content = Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const Text(
+          'Breath cycle',
+          style: TextStyle(
+            color: Colors.white,
+            fontSize: 18,
+            fontWeight: FontWeight.w600,
+            letterSpacing: 0,
+          ),
+        ),
+        const SizedBox(height: 16),
+        Row(
+          children: [
+            Expanded(
+              child: _DurationNumberField(
+                key: const ValueKey('pranayama-in-breath-field'),
+                label: 'In-breath',
+                controller: inBreathController,
+                enabled: true,
+                onChanged: onChanged,
+              ),
             ),
-          ),
-          const SizedBox(height: 16),
-          Row(
-            children: [
-              Expanded(
-                child: _DurationNumberField(
-                  key: const ValueKey('pranayama-in-breath-field'),
-                  label: 'In-breath',
-                  controller: inBreathController,
-                  enabled: true,
-                  onChanged: onChanged,
-                ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: _DurationNumberField(
+                key: const ValueKey('pranayama-first-hold-field'),
+                label: 'Hold',
+                controller: firstHoldController,
+                enabled: true,
+                onChanged: onChanged,
               ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: _DurationNumberField(
-                  key: const ValueKey('pranayama-first-hold-field'),
-                  label: 'Hold',
-                  controller: firstHoldController,
-                  enabled: true,
-                  onChanged: onChanged,
-                ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        Row(
+          children: [
+            Expanded(
+              child: _DurationNumberField(
+                key: const ValueKey('pranayama-out-breath-field'),
+                label: 'Out-breath',
+                controller: outBreathController,
+                enabled: true,
+                onChanged: onChanged,
               ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          Row(
-            children: [
-              Expanded(
-                child: _DurationNumberField(
-                  key: const ValueKey('pranayama-out-breath-field'),
-                  label: 'Out-breath',
-                  controller: outBreathController,
-                  enabled: true,
-                  onChanged: onChanged,
-                ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: _DurationNumberField(
+                key: const ValueKey('pranayama-second-hold-field'),
+                label: 'Hold',
+                controller: secondHoldController,
+                enabled: true,
+                onChanged: onChanged,
               ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: _DurationNumberField(
-                  key: const ValueKey('pranayama-second-hold-field'),
-                  label: 'Hold',
-                  controller: secondHoldController,
-                  enabled: true,
-                  onChanged: onChanged,
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
+            ),
+          ],
+        ),
+      ],
     );
+
+    if (!wrapInPanel) {
+      return content;
+    }
+
+    return _TimerEditPanel(child: content);
   }
 }
 
@@ -1664,11 +1988,20 @@ Map<String, Object?> _encodePranayamaPreset(PranayamaPreset preset) {
     'id': preset.id,
     'name': preset.name,
     'note': preset.note,
-    'durationSeconds': preset.duration?.inSeconds,
-    'inBreathSeconds': preset.inBreath.inSeconds,
-    'firstHoldSeconds': preset.firstHold.inSeconds,
-    'outBreathSeconds': preset.outBreath.inSeconds,
-    'secondHoldSeconds': preset.secondHold.inSeconds,
+    'segments': [
+      for (final segment in preset.segments) _encodePranayamaSegment(segment),
+    ],
+  };
+}
+
+Map<String, Object?> _encodePranayamaSegment(PranayamaSegment segment) {
+  return {
+    'id': segment.id,
+    'durationSeconds': segment.duration?.inSeconds,
+    'inBreathSeconds': segment.inBreath.inSeconds,
+    'firstHoldSeconds': segment.firstHold.inSeconds,
+    'outBreathSeconds': segment.outBreath.inSeconds,
+    'secondHoldSeconds': segment.secondHold.inSeconds,
   };
 }
 
@@ -1751,6 +2084,7 @@ PranayamaPreset? _decodePranayamaPreset(Object? encodedPreset) {
   final name = encodedPreset['name'];
   final id = encodedPreset['id'];
   final note = encodedPreset['note'];
+  final encodedSegments = encodedPreset['segments'];
   final durationSeconds = encodedPreset['durationSeconds'];
   final inBreathSeconds = encodedPreset['inBreathSeconds'];
   final firstHoldSeconds = encodedPreset['firstHoldSeconds'];
@@ -1764,6 +2098,64 @@ PranayamaPreset? _decodePranayamaPreset(Object? encodedPreset) {
     return null;
   }
   if (note != null && note is! String) {
+    return null;
+  }
+  final segments = <PranayamaSegment>[];
+  if (encodedSegments is List) {
+    for (final encodedSegment in encodedSegments) {
+      final segment = _decodePranayamaSegment(encodedSegment);
+      if (segment == null) {
+        return null;
+      }
+      segments.add(segment);
+    }
+  } else {
+    // Backward-compatible migration for presets saved before multi-segment
+    // pranayama existed.
+    final segment = _decodePranayamaSegment({
+      'id': 'segment-${id is String ? id : _legacyPranayamaPresetId(name)}',
+      'durationSeconds': durationSeconds,
+      'inBreathSeconds': inBreathSeconds,
+      'firstHoldSeconds': firstHoldSeconds,
+      'outBreathSeconds': outBreathSeconds,
+      'secondHoldSeconds': secondHoldSeconds,
+    });
+    if (segment == null) {
+      return null;
+    }
+    segments.add(segment);
+  }
+
+  if (segments.isEmpty) {
+    return null;
+  }
+  for (var index = 0; index < segments.length - 1; index += 1) {
+    if (segments[index].isInfinite) {
+      return null;
+    }
+  }
+
+  return PranayamaPreset(
+    id: id as String? ?? _legacyPranayamaPresetId(name),
+    name: name,
+    note: note as String? ?? '',
+    segments: segments,
+  );
+}
+
+PranayamaSegment? _decodePranayamaSegment(Object? encodedSegment) {
+  if (encodedSegment is! Map<String, Object?>) {
+    return null;
+  }
+
+  final id = encodedSegment['id'];
+  final durationSeconds = encodedSegment['durationSeconds'];
+  final inBreathSeconds = encodedSegment['inBreathSeconds'];
+  final firstHoldSeconds = encodedSegment['firstHoldSeconds'];
+  final outBreathSeconds = encodedSegment['outBreathSeconds'];
+  final secondHoldSeconds = encodedSegment['secondHoldSeconds'];
+
+  if (id != null && (id is! String || id.trim().isEmpty)) {
     return null;
   }
   if (durationSeconds != null &&
@@ -1781,10 +2173,8 @@ PranayamaPreset? _decodePranayamaPreset(Object? encodedPreset) {
     return null;
   }
 
-  return PranayamaPreset(
-    id: id as String? ?? _legacyPranayamaPresetId(name),
-    name: name,
-    note: note as String? ?? '',
+  return PranayamaSegment(
+    id: id as String? ?? 'segment-${DateTime.now().microsecondsSinceEpoch}',
     duration: durationSeconds == null
         ? null
         : Duration(seconds: durationSeconds as int),
@@ -1835,7 +2225,10 @@ _PranayamaPhaseSnapshot _phaseSnapshotForPranayama(
   PranayamaPreset preset,
   Duration elapsed,
 ) {
-  final cycleMilliseconds = preset.cycleDuration.inMilliseconds;
+  final segmentPosition = _pranayamaSegmentAtElapsed(preset, elapsed);
+  final segment = segmentPosition.segment;
+  final localElapsed = segmentPosition.localElapsed;
+  final cycleMilliseconds = segment.cycleDuration.inMilliseconds;
   if (cycleMilliseconds <= 0) {
     return const _PranayamaPhaseSnapshot(
       label: 'Ready',
@@ -1845,7 +2238,7 @@ _PranayamaPhaseSnapshot _phaseSnapshotForPranayama(
     );
   }
 
-  final elapsedMilliseconds = elapsed.inMilliseconds.clamp(0, 1 << 62);
+  final elapsedMilliseconds = localElapsed.inMilliseconds.clamp(0, 1 << 62);
   final cycleElapsed = elapsedMilliseconds % cycleMilliseconds;
   final cycleProgress = cycleElapsed / cycleMilliseconds;
   var cursor = cycleElapsed;
@@ -1868,10 +2261,10 @@ _PranayamaPhaseSnapshot _phaseSnapshotForPranayama(
   }
 
   final phases = [
-    ('Inhale', preset.inBreath),
-    ('Hold', preset.firstHold),
-    ('Exhale', preset.outBreath),
-    ('Hold', preset.secondHold),
+    ('Inhale', segment.inBreath),
+    ('Hold', segment.firstHold),
+    ('Exhale', segment.outBreath),
+    ('Hold', segment.secondHold),
   ];
 
   var phaseStart = 0;
@@ -1898,10 +2291,15 @@ String _pranayamaPresetDetails(PranayamaPreset preset) {
   final duration = preset.isInfinite
       ? 'Infinite'
       : _formatDuration(preset.duration!);
-  final rhythm =
-      '${preset.inBreath.inSeconds}-${preset.firstHold.inSeconds}-${preset.outBreath.inSeconds}-${preset.secondHold.inSeconds}';
+  final rhythm = preset.segments.length == 1
+      ? _pranayamaSegmentRhythm(preset.firstSegment)
+      : '${preset.segments.length} segments';
   final note = preset.note.trim();
   return note.isEmpty ? '$duration | $rhythm' : '$duration | $note';
+}
+
+String _pranayamaSegmentRhythm(PranayamaSegment segment) {
+  return '${segment.inBreath.inSeconds}-${segment.firstHold.inSeconds}-${segment.outBreath.inSeconds}-${segment.secondHold.inSeconds}';
 }
 
 String _formatTimerDisplay(Duration duration) {

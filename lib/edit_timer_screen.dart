@@ -225,10 +225,6 @@ class _TimerEditScreenState extends State<TimerEditScreen> {
 
   void _reorderIntermediateBell(int oldIndex, int newIndex) {
     setState(() {
-      if (newIndex > oldIndex) {
-        newIndex -= 1;
-      }
-
       final bell = _intermediateBells.removeAt(oldIndex);
       _intermediateBells.insert(newIndex, bell);
     });
@@ -242,11 +238,10 @@ class _TimerEditScreenState extends State<TimerEditScreen> {
     // Users may type overflow values like 90 minutes or 3600 seconds. Duration
     // does the carry for us, then the controllers are rewritten to canonical
     // hh:mm:ss fields so saved timers are always valid.
-    final duration = Duration(
-      hours: _nonNegativeFieldValue(_hoursController),
-      minutes: _nonNegativeFieldValue(_minutesController),
-      seconds: _nonNegativeFieldValue(_secondsController),
-    );
+    final hours = _nonNegativeFieldValue(_hoursController);
+    final minutes = _nonNegativeFieldValue(_minutesController);
+    final seconds = _nonNegativeFieldValue(_secondsController);
+    final duration = Duration(hours: hours, minutes: minutes, seconds: seconds);
 
     if (duration.inHours > 999) {
       // Past this point the duration editor becomes unwieldy; use the explicit
@@ -262,13 +257,32 @@ class _TimerEditScreenState extends State<TimerEditScreen> {
         ? const Duration(seconds: 1)
         : duration;
 
-    _updateDurationFields(normalizedDuration);
+    if (enforceMinimum ||
+        _hasBlankDurationField(
+                  _hoursController,
+                  _minutesController,
+                  _secondsController,
+                ) ==
+                false &&
+            (minutes >= 60 || seconds >= 60)) {
+      _updateDurationFields(normalizedDuration);
+    }
     return normalizedDuration;
   }
 
   int _nonNegativeFieldValue(TextEditingController controller) {
     final value = int.tryParse(controller.text.trim()) ?? 0;
     return value < 0 ? 0 : value;
+  }
+
+  bool _hasBlankDurationField(
+    TextEditingController hoursController,
+    TextEditingController minutesController,
+    TextEditingController secondsController,
+  ) {
+    return hoursController.text.trim().isEmpty ||
+        minutesController.text.trim().isEmpty ||
+        secondsController.text.trim().isEmpty;
   }
 
   void _updateDurationFields(Duration duration) {
@@ -574,6 +588,9 @@ class _DurationEditor extends StatelessWidget {
     required this.secondsController,
     required this.onDurationChanged,
     required this.onInfiniteChanged,
+    this.title = 'Duration',
+    this.showInfiniteToggle = true,
+    this.wrapInPanel = true,
   });
 
   final bool isInfinite;
@@ -582,56 +599,59 @@ class _DurationEditor extends StatelessWidget {
   final TextEditingController secondsController;
   final VoidCallback onDurationChanged;
   final ValueChanged<bool> onInfiniteChanged;
+  final String title;
+  final bool showInfiniteToggle;
+  final bool wrapInPanel;
 
   @override
   Widget build(BuildContext context) {
-    return _TimerEditPanel(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          const Text(
-            'Duration',
-            style: TextStyle(
-              color: Colors.white,
-              fontSize: 18,
-              fontWeight: FontWeight.w600,
-              letterSpacing: 0,
+    final content = Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(
+          title,
+          style: const TextStyle(
+            color: Colors.white,
+            fontSize: 18,
+            fontWeight: FontWeight.w600,
+            letterSpacing: 0,
+          ),
+        ),
+        const SizedBox(height: 16),
+        Row(
+          children: [
+            Expanded(
+              child: _DurationNumberField(
+                key: const ValueKey('duration-hours-field'),
+                label: 'Hours',
+                controller: hoursController,
+                enabled: !isInfinite,
+                onChanged: onDurationChanged,
+              ),
             ),
-          ),
-          const SizedBox(height: 16),
-          Row(
-            children: [
-              Expanded(
-                child: _DurationNumberField(
-                  key: const ValueKey('duration-hours-field'),
-                  label: 'Hours',
-                  controller: hoursController,
-                  enabled: !isInfinite,
-                  onChanged: onDurationChanged,
-                ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: _DurationNumberField(
+                key: const ValueKey('duration-minutes-field'),
+                label: 'Minutes',
+                controller: minutesController,
+                enabled: !isInfinite,
+                onChanged: onDurationChanged,
               ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: _DurationNumberField(
-                  key: const ValueKey('duration-minutes-field'),
-                  label: 'Minutes',
-                  controller: minutesController,
-                  enabled: !isInfinite,
-                  onChanged: onDurationChanged,
-                ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: _DurationNumberField(
+                key: const ValueKey('duration-seconds-field'),
+                label: 'Seconds',
+                controller: secondsController,
+                enabled: !isInfinite,
+                onChanged: onDurationChanged,
               ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: _DurationNumberField(
-                  key: const ValueKey('duration-seconds-field'),
-                  label: 'Seconds',
-                  controller: secondsController,
-                  enabled: !isInfinite,
-                  onChanged: onDurationChanged,
-                ),
-              ),
-            ],
-          ),
+            ),
+          ],
+        ),
+        if (showInfiniteToggle) ...[
           const SizedBox(height: 12),
           CheckboxListTile(
             key: const ValueKey('duration-infinite-checkbox'),
@@ -652,8 +672,14 @@ class _DurationEditor extends StatelessWidget {
             checkColor: Colors.black,
           ),
         ],
-      ),
+      ],
     );
+
+    if (!wrapInPanel) {
+      return content;
+    }
+
+    return _TimerEditPanel(child: content);
   }
 }
 
@@ -834,7 +860,7 @@ class _IntermediateBellsEditor extends StatelessWidget {
             physics: const NeverScrollableScrollPhysics(),
             buildDefaultDragHandles: false,
             itemCount: bells.length,
-            onReorder: onReorderBell,
+            onReorderItem: onReorderBell,
             itemBuilder: (context, index) {
               final entry = bells[index];
               return _IntermediateBellEditorRow(
@@ -1031,7 +1057,7 @@ class _IntermediateBellEditorRowState
       _startMinutesController,
       _startSecondsController,
     );
-    _setDurationFields(
+    _canonicalizeDurationFieldsIfNeeded(
       startTime,
       _startHoursController,
       _startMinutesController,
@@ -1049,9 +1075,8 @@ class _IntermediateBellEditorRowState
       _repeatHoursController,
       _repeatMinutesController,
       _repeatSecondsController,
-      enforceMinimum: true,
     );
-    _setDurationFields(
+    _canonicalizeDurationFieldsIfNeeded(
       repeatInterval,
       _repeatHoursController,
       _repeatMinutesController,
@@ -1100,6 +1125,29 @@ class _IntermediateBellEditorRowState
   int _nonNegativeTextValue(String text) {
     final value = int.tryParse(text.trim()) ?? 0;
     return value < 0 ? 0 : value;
+  }
+
+  void _canonicalizeDurationFieldsIfNeeded(
+    Duration duration,
+    TextEditingController hoursController,
+    TextEditingController minutesController,
+    TextEditingController secondsController, {
+    bool enforceMinimum = false,
+  }) {
+    final hasBlankField =
+        hoursController.text.trim().isEmpty ||
+        minutesController.text.trim().isEmpty ||
+        secondsController.text.trim().isEmpty;
+    final minutes = _nonNegativeTextValue(minutesController.text);
+    final seconds = _nonNegativeTextValue(secondsController.text);
+    if (enforceMinimum || !hasBlankField && (minutes >= 60 || seconds >= 60)) {
+      _setDurationFields(
+        duration,
+        hoursController,
+        minutesController,
+        secondsController,
+      );
+    }
   }
 
   void _setDurationFields(

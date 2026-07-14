@@ -218,7 +218,7 @@ class _EditableTimerBrowser extends StatelessWidget {
         );
       },
       itemCount: rows.length,
-      onReorder: onReorder,
+      onReorderItem: onReorder,
       itemBuilder: (context, index) {
         final row = rows[index];
 
@@ -1027,26 +1027,29 @@ class _StatsTabState extends State<_StatsTab> {
             ),
             if (_period != _StatsPeriod.days) ...[
               const SizedBox(height: 12),
-              CheckboxListTile(
-                key: const ValueKey('stats-per-day-checkbox'),
-                value: _showDailyAverage,
-                onChanged: (value) {
-                  setState(() {
-                    _showDailyAverage = value ?? false;
-                  });
-                },
-                title: const Text(
-                  'Per day',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 16,
-                    letterSpacing: 0,
+              Material(
+                color: Colors.transparent,
+                child: CheckboxListTile(
+                  key: const ValueKey('stats-per-day-checkbox'),
+                  value: _showDailyAverage,
+                  onChanged: (value) {
+                    setState(() {
+                      _showDailyAverage = value ?? false;
+                    });
+                  },
+                  title: const Text(
+                    'Per day',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 16,
+                      letterSpacing: 0,
+                    ),
                   ),
+                  contentPadding: EdgeInsets.zero,
+                  controlAffinity: ListTileControlAffinity.leading,
+                  activeColor: Colors.white,
+                  checkColor: Colors.black,
                 ),
-                contentPadding: EdgeInsets.zero,
-                controlAffinity: ListTileControlAffinity.leading,
-                activeColor: Colors.white,
-                checkColor: Colors.black,
               ),
             ],
             const SizedBox(height: 16),

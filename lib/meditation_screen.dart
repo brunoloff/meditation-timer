@@ -13,6 +13,13 @@ class MeditationSessionScreen extends StatefulWidget {
     this.onBellPlayed,
     this.onDetachedEndingBellRequested,
     this.onSessionFinished,
+    this.pranayamaSessionListenable,
+    this.pranayamaEntries = const <PranayamaBrowserEntry>[],
+    this.recentPranayamaPresets = const <PranayamaPreset>[],
+    this.expandedPranayamaFolders = const <String>{},
+    this.onStartPranayamaPreset,
+    this.onTogglePranayamaPaused,
+    this.onStopPranayama,
   });
 
   final MeditationTimerPreset timer;
@@ -25,6 +32,13 @@ class MeditationSessionScreen extends StatefulWidget {
   final ValueChanged<BellSound>? onBellPlayed;
   final ValueChanged<BellSound>? onDetachedEndingBellRequested;
   final ValueChanged<MeditationLogEntry>? onSessionFinished;
+  final ValueListenable<PranayamaSessionSnapshot>? pranayamaSessionListenable;
+  final List<PranayamaBrowserEntry> pranayamaEntries;
+  final List<PranayamaPreset> recentPranayamaPresets;
+  final Set<String> expandedPranayamaFolders;
+  final ValueChanged<PranayamaPreset>? onStartPranayamaPreset;
+  final VoidCallback? onTogglePranayamaPaused;
+  final VoidCallback? onStopPranayama;
 
   @override
   State<MeditationSessionScreen> createState() =>
@@ -46,6 +60,8 @@ class _MeditationSessionScreenState extends State<MeditationSessionScreen>
   bool _isSavingSummary = false;
   bool _prefersDisplayDimmed = false;
   bool _manuallyDimmedDuringRevealWindow = false;
+  bool _pausedPranayamaWithMeditation = false;
+  bool _stoppedConcurrentPranayamaForSessionEnd = false;
   _MeditationSummary? _summary;
   MeditationLogEntry? _pendingEntry;
 
@@ -137,6 +153,14 @@ class _MeditationSessionScreenState extends State<MeditationSessionScreen>
   }
 
   void _pauseSession() {
+    final pranayamaSnapshot = widget.pranayamaSessionListenable?.value;
+    if (pranayamaSnapshot != null &&
+        pranayamaSnapshot.isActive &&
+        !pranayamaSnapshot.isPaused) {
+      _pausedPranayamaWithMeditation = true;
+      widget.onTogglePranayamaPaused?.call();
+    }
+
     _timer?.cancel();
     _activeElapsedBeforeRun = _currentElapsed();
     _runStartedAt = null;
@@ -147,6 +171,15 @@ class _MeditationSessionScreenState extends State<MeditationSessionScreen>
   }
 
   void _resumeSession() {
+    final pranayamaSnapshot = widget.pranayamaSessionListenable?.value;
+    if (_pausedPranayamaWithMeditation &&
+        pranayamaSnapshot != null &&
+        pranayamaSnapshot.isActive &&
+        pranayamaSnapshot.isPaused) {
+      widget.onTogglePranayamaPaused?.call();
+    }
+    _pausedPranayamaWithMeditation = false;
+
     _runStartedAt = widget.now();
     setState(() {
       _isRunning = true;
@@ -171,6 +204,7 @@ class _MeditationSessionScreenState extends State<MeditationSessionScreen>
       _isCompleting = true;
       _isRunning = false;
     });
+    _stopConcurrentPranayamaIfActive();
 
     if (playEndingBell &&
         (forceEndingBell || widget.playBells) &&
@@ -237,8 +271,48 @@ class _MeditationSessionScreenState extends State<MeditationSessionScreen>
     _endSession();
   }
 
+  Future<void> _selectPranayamaPreset() async {
+    final selectedPreset = await Navigator.of(context).push<PranayamaPreset>(
+      MaterialPageRoute<PranayamaPreset>(
+        builder: (_) => PranayamaPresetPickerScreen(
+          recentPresets: widget.recentPranayamaPresets,
+          presetEntries: widget.pranayamaEntries,
+          expandedFolders: widget.expandedPranayamaFolders,
+        ),
+      ),
+    );
+
+    if (!mounted || selectedPreset == null) {
+      return;
+    }
+
+    _pausedPranayamaWithMeditation = false;
+    widget.onStartPranayamaPreset?.call(selectedPreset);
+  }
+
+  void _stopMeditationPranayama() {
+    _pausedPranayamaWithMeditation = false;
+    widget.onStopPranayama?.call();
+  }
+
+  void _stopConcurrentPranayamaIfActive() {
+    if (_stoppedConcurrentPranayamaForSessionEnd) {
+      return;
+    }
+
+    final pranayamaSnapshot = widget.pranayamaSessionListenable?.value;
+    if (pranayamaSnapshot == null || !pranayamaSnapshot.isActive) {
+      return;
+    }
+
+    _pausedPranayamaWithMeditation = false;
+    _stoppedConcurrentPranayamaForSessionEnd = true;
+    widget.onStopPranayama?.call();
+  }
+
   void _endSession() {
     _timer?.cancel();
+    _stopConcurrentPranayamaIfActive();
     unawaited(widget.setWakeLockEnabled(false));
     unawaited(widget.backgroundTimerService.stop());
     // When launched from HomeScreen, return to that existing route so concurrent
@@ -340,6 +414,9 @@ class _MeditationSessionScreenState extends State<MeditationSessionScreen>
                         ),
                       ),
                     ),
+                    _MeditationPranayamaPanelHost(
+                      listenable: widget.pranayamaSessionListenable,
+                    ),
                     const Spacer(flex: 6),
                     Center(
                       child: Text(
@@ -388,6 +465,12 @@ class _MeditationSessionScreenState extends State<MeditationSessionScreen>
                   ],
                 ),
               ),
+            ),
+            _MeditationPranayamaActionButton(
+              listenable: widget.pranayamaSessionListenable,
+              canSelect: widget.onStartPranayamaPreset != null,
+              onSelect: _selectPranayamaPreset,
+              onStop: _stopMeditationPranayama,
             ),
             if (screenDimmed)
               Positioned.fill(
@@ -450,6 +533,423 @@ class _MeditationSessionScreenState extends State<MeditationSessionScreen>
     }
 
     return elapsed;
+  }
+}
+
+class PranayamaPresetPickerScreen extends StatefulWidget {
+  const PranayamaPresetPickerScreen({
+    super.key,
+    required this.recentPresets,
+    required this.presetEntries,
+    required this.expandedFolders,
+  });
+
+  final List<PranayamaPreset> recentPresets;
+  final List<PranayamaBrowserEntry> presetEntries;
+  final Set<String> expandedFolders;
+
+  @override
+  State<PranayamaPresetPickerScreen> createState() =>
+      _PranayamaPresetPickerScreenState();
+}
+
+class _PranayamaPresetPickerScreenState
+    extends State<PranayamaPresetPickerScreen> {
+  late final Set<String> _expandedFolders = Set<String>.of(
+    widget.expandedFolders,
+  );
+
+  void _toggleFolder(String folderName) {
+    setState(() {
+      if (!_expandedFolders.add(folderName)) {
+        _expandedFolders.remove(folderName);
+      }
+    });
+  }
+
+  void _selectPreset(PranayamaPreset preset) {
+    Navigator.of(context).pop(preset);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: SafeArea(
+        child: Column(
+          children: [
+            _PranayamaPickerTitleBar(
+              onClose: () => Navigator.of(context).pop(),
+            ),
+            const Divider(height: 1, thickness: 1, color: _dividerColor),
+            Expanded(
+              child: SingleChildScrollView(
+                child: ColoredBox(
+                  color: _homeSurfaceColor,
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(24, 24, 24, 48),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        const _SectionHeader(title: 'Recent presets'),
+                        const SizedBox(height: 12),
+                        if (widget.recentPresets.isEmpty)
+                          const _EmptyPranayamaRecentPresetsMessage()
+                        else
+                          for (final preset in widget.recentPresets)
+                            _PranayamaPresetRow(
+                              preset: preset,
+                              keySuffix: 'picker-recent',
+                              onTap: () => _selectPreset(preset),
+                            ),
+                        const SizedBox(height: 28),
+                        const _SectionHeader(title: 'Presets'),
+                        const SizedBox(height: 12),
+                        _PranayamaBrowser(
+                          entries: widget.presetEntries,
+                          expandedFolders: _expandedFolders,
+                          onToggleFolder: _toggleFolder,
+                          onStartPreset: _selectPreset,
+                        ),
+                        const SizedBox(height: 280),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _PranayamaPickerTitleBar extends StatelessWidget {
+  const _PranayamaPickerTitleBar({required this.onClose});
+
+  final VoidCallback onClose;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(8, 10, 16, 10),
+      child: Row(
+        children: [
+          IconButton(
+            key: const ValueKey('close-pranayama-picker-button'),
+            onPressed: onClose,
+            tooltip: 'Cancel',
+            icon: const Icon(Icons.close_rounded),
+          ),
+          const Expanded(
+            child: Text(
+              'Select preset',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 20,
+                fontWeight: FontWeight.w600,
+                letterSpacing: 0,
+              ),
+            ),
+          ),
+          const SizedBox(width: 48),
+        ],
+      ),
+    );
+  }
+}
+
+class _MeditationPranayamaActionButton extends StatelessWidget {
+  const _MeditationPranayamaActionButton({
+    required this.listenable,
+    required this.canSelect,
+    required this.onSelect,
+    required this.onStop,
+  });
+
+  final ValueListenable<PranayamaSessionSnapshot>? listenable;
+  final bool canSelect;
+  final VoidCallback onSelect;
+  final VoidCallback onStop;
+
+  @override
+  Widget build(BuildContext context) {
+    final sessionListenable = listenable;
+    if (sessionListenable == null || !canSelect) {
+      return const SizedBox.shrink();
+    }
+
+    return Positioned(
+      top: 106,
+      right: 24,
+      child: ValueListenableBuilder<PranayamaSessionSnapshot>(
+        valueListenable: sessionListenable,
+        builder: (context, snapshot, _) {
+          final isActive = snapshot.isActive;
+          return Material(
+            color: const Color(0xFF111114),
+            borderRadius: BorderRadius.circular(999),
+            clipBehavior: Clip.antiAlias,
+            child: IconButton(
+              key: ValueKey(
+                isActive
+                    ? 'stop-meditation-pranayama-button'
+                    : 'select-pranayama-preset-button',
+              ),
+              onPressed: isActive ? onStop : onSelect,
+              tooltip: isActive ? 'Stop pranayama' : 'Select pranayama preset',
+              icon: Icon(
+                isActive ? Icons.stop_rounded : Icons.air_rounded,
+                color: Colors.white,
+                size: 34,
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _MeditationPranayamaPanelHost extends StatelessWidget {
+  const _MeditationPranayamaPanelHost({required this.listenable});
+
+  final ValueListenable<PranayamaSessionSnapshot>? listenable;
+
+  @override
+  Widget build(BuildContext context) {
+    final sessionListenable = listenable;
+    if (sessionListenable == null) {
+      return const SizedBox.shrink();
+    }
+
+    return ValueListenableBuilder<PranayamaSessionSnapshot>(
+      valueListenable: sessionListenable,
+      builder: (context, snapshot, _) {
+        if (!snapshot.isActive) {
+          return const SizedBox.shrink();
+        }
+
+        return Padding(
+          padding: const EdgeInsets.only(top: 24),
+          child: SizedBox(
+            key: const ValueKey('meditation-pranayama-panel'),
+            height: 210,
+            child: _MeditationPranayamaPanel(snapshot: snapshot),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _MeditationPranayamaPanel extends StatelessWidget {
+  const _MeditationPranayamaPanel({required this.snapshot});
+
+  final PranayamaSessionSnapshot snapshot;
+
+  @override
+  Widget build(BuildContext context) {
+    final preset = snapshot.preset!;
+    final phase = _phaseSnapshotForPranayama(preset, snapshot.elapsed);
+    final segmentPosition = _pranayamaSegmentAtElapsed(
+      preset,
+      snapshot.elapsed,
+    );
+    final activeSegment = segmentPosition.segment;
+    final segmentRemaining = _remainingPranayamaSegmentDuration(
+      segmentPosition,
+    );
+    final bpm = activeSegment.cycleDuration == Duration.zero
+        ? 0.0
+        : 60 / activeSegment.cycleDuration.inMilliseconds * 1000;
+
+    return Material(
+      color: Colors.black,
+      borderRadius: BorderRadius.circular(8),
+      clipBehavior: Clip.antiAlias,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          border: Border.all(color: const Color(0xFF26262B)),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Stack(
+          children: [
+            Positioned.fill(
+              child: CustomPaint(
+                painter: _MeditationPranayamaWavePainter(
+                  preset: preset,
+                  elapsed: snapshot.elapsed,
+                ),
+              ),
+            ),
+            Positioned(
+              left: 14,
+              top: 12,
+              child: DefaultTextStyle(
+                style: const TextStyle(
+                  color: Color(0xFFAAAAB0),
+                  fontSize: 12,
+                  fontFeatures: [FontFeature.tabularFigures()],
+                  letterSpacing: 0,
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Clock: ${_formatPranayamaSegmentRemaining(segmentRemaining)}',
+                    ),
+                    Text('Breaths: ${phase.breathCount}'),
+                    Text('BPM: ${bpm.toStringAsFixed(1)}'),
+                  ],
+                ),
+              ),
+            ),
+            Center(
+              child: Text(
+                snapshot.isPaused ? 'Paused' : phase.label,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 34,
+                  fontWeight: FontWeight.w300,
+                  letterSpacing: 0,
+                ),
+              ),
+            ),
+            Positioned(
+              bottom: 18,
+              left: 0,
+              right: 0,
+              child: Center(
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    border: Border.all(color: const Color(0xFFBDBDC2)),
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 18,
+                      vertical: 7,
+                    ),
+                    child: Text(
+                      preset.name,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w500,
+                        letterSpacing: 0,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+Duration? _remainingPranayamaSegmentDuration(
+  PranayamaSegmentPosition segmentPosition,
+) {
+  final effectiveDuration = _effectivePranayamaSegmentDuration(
+    segmentPosition.segment,
+  );
+  if (effectiveDuration == null) {
+    return null;
+  }
+
+  final remaining = effectiveDuration - segmentPosition.localElapsed;
+  return remaining.isNegative ? Duration.zero : remaining;
+}
+
+String _formatPranayamaSegmentRemaining(Duration? duration) {
+  if (duration == null) {
+    return '--:--';
+  }
+  return _formatTimerDisplay(duration);
+}
+
+class _MeditationPranayamaWavePainter extends CustomPainter {
+  const _MeditationPranayamaWavePainter({
+    required this.preset,
+    required this.elapsed,
+  });
+
+  final PranayamaPreset preset;
+  final Duration elapsed;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final linePaint = Paint()
+      ..color = const Color(0xDDEFEFF1)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 4
+      ..strokeCap = StrokeCap.round;
+    final transitionLinePaint = Paint()
+      ..color = const Color(0x6677777C)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 3
+      ..strokeCap = StrokeCap.round;
+    final activeDotPaint = Paint()..color = Colors.white;
+    final transitionDotPaint = Paint()..color = const Color(0x99FFFFFF);
+    final guide = _PranayamaPathGuide.fromPreset(
+      preset,
+      elapsed: elapsed,
+      size: size,
+    );
+
+    final path = Path()
+      ..moveTo(guide.start.dx, guide.start.dy)
+      ..lineTo(guide.afterInhale.dx, guide.afterInhale.dy)
+      ..lineTo(guide.afterFirstHold.dx, guide.afterFirstHold.dy)
+      ..lineTo(guide.afterExhale.dx, guide.afterExhale.dy)
+      ..lineTo(guide.end.dx, guide.end.dy);
+
+    canvas.drawPath(path, linePaint);
+    _drawDashedLine(
+      canvas,
+      guide.leadingStart,
+      guide.start,
+      transitionLinePaint,
+    );
+    _drawDashedLine(canvas, guide.end, guide.trailingEnd, transitionLinePaint);
+    for (final dot in guide.transitionDots) {
+      canvas.drawCircle(dot, 7, transitionDotPaint);
+    }
+    canvas.drawCircle(guide.activeDot, 9, activeDotPaint);
+  }
+
+  void _drawDashedLine(Canvas canvas, Offset start, Offset end, Paint paint) {
+    const dashLength = 7.0;
+    const gapLength = 7.0;
+    final delta = end - start;
+    final distance = delta.distance;
+    if (distance <= 0) {
+      return;
+    }
+
+    final direction = delta / distance;
+    var cursor = 0.0;
+    while (cursor < distance) {
+      final next = (cursor + dashLength).clamp(0.0, distance);
+      canvas.drawLine(
+        start + direction * cursor,
+        start + direction * next,
+        paint,
+      );
+      cursor = next + gapLength;
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _MeditationPranayamaWavePainter oldDelegate) {
+    return oldDelegate.preset != preset || oldDelegate.elapsed != elapsed;
   }
 }
 

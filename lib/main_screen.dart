@@ -26,7 +26,8 @@ class _HomeScreenState extends State<HomeScreen> {
   AudioPlayer? _pranayamaAudioPlayer;
   Future<void>? _pranayamaAudioPlayback;
   String? _pranayamaAudioPresetKey;
-  final Map<String, Uint8List> _pranayamaToneCache = <String, Uint8List>{};
+  final Map<String, _PranayamaToneClip> _pranayamaToneCache =
+      <String, _PranayamaToneClip>{};
   bool _isPranayamaAudioContextConfigured = false;
   // Async audio startup can complete after the user pauses/stops/switches a
   // preset. These generations make those stale completions harmless.
@@ -53,6 +54,8 @@ class _HomeScreenState extends State<HomeScreen> {
   Duration _pranayamaElapsedBeforePause = Duration.zero;
   bool _isPranayamaPaused = false;
   Timer? _pranayamaTicker;
+  final ValueNotifier<PranayamaSessionSnapshot> _pranayamaSessionNotifier =
+      ValueNotifier<PranayamaSessionSnapshot>(PranayamaSessionSnapshot.empty);
 
   @override
   void initState() {
@@ -66,6 +69,7 @@ class _HomeScreenState extends State<HomeScreen> {
     _disposePranayamaAudioPlayers();
     _settingsAudioPlayer?.dispose();
     _detachedEndingBellPlayer?.dispose();
+    _pranayamaSessionNotifier.dispose();
     super.dispose();
   }
 
@@ -432,6 +436,7 @@ class _HomeScreenState extends State<HomeScreen> {
         _pranayamaAudioPresetKey = null;
       }
     });
+    _notifyPranayamaSession();
 
     await _saveTimerEntries();
     await _savePranayamaEntries();
@@ -819,10 +824,6 @@ class _HomeScreenState extends State<HomeScreen> {
 
   void _reorderTimerEntry(int oldIndex, int newIndex) {
     setState(() {
-      if (newIndex > oldIndex) {
-        newIndex -= 1;
-      }
-
       final rows = _editableRowsFor(_timerEntries);
       final movingRow = rows[oldIndex];
       final entriesWithoutMoving = _removeEditableRow(_timerEntries, movingRow);
@@ -876,6 +877,13 @@ class _HomeScreenState extends State<HomeScreen> {
           logStore: _logStore,
           backgroundTimerService: _backgroundTimerService,
           onDetachedEndingBellRequested: _playDetachedEndingBell,
+          pranayamaSessionListenable: _pranayamaSessionNotifier,
+          pranayamaEntries: _pranayamaEntries,
+          recentPranayamaPresets: _recentPranayamaPresets,
+          expandedPranayamaFolders: _expandedPranayamaFolders,
+          onStartPranayamaPreset: _startPranayamaPreset,
+          onTogglePranayamaPaused: _togglePranayamaPaused,
+          onStopPranayama: _stopPranayamaSession,
         ),
       ),
     );
@@ -1131,6 +1139,7 @@ class _HomeScreenState extends State<HomeScreen> {
         _activePranayamaPreset = updatedPreset;
       }
     });
+    _notifyPranayamaSession();
 
     unawaited(_savePranayamaEntries());
     unawaited(_saveRecentPranayamaPresetIds());
@@ -1179,6 +1188,7 @@ class _HomeScreenState extends State<HomeScreen> {
         _stopPranayamaSession(updateState: false);
       }
     });
+    _notifyPranayamaSession();
 
     unawaited(_savePranayamaEntries());
     unawaited(_saveRecentPranayamaPresetIds());
@@ -1206,10 +1216,6 @@ class _HomeScreenState extends State<HomeScreen> {
 
   void _reorderPranayamaEntry(int oldIndex, int newIndex) {
     setState(() {
-      if (newIndex > oldIndex) {
-        newIndex -= 1;
-      }
-
       final rows = _editablePranayamaRowsFor(_pranayamaEntries);
       final movingRow = rows[oldIndex];
       final entriesWithoutMoving = _removeEditablePranayamaRow(
@@ -1260,6 +1266,14 @@ class _HomeScreenState extends State<HomeScreen> {
     unawaited(_beginPranayamaPreset(preset));
   }
 
+  void _notifyPranayamaSession() {
+    _pranayamaSessionNotifier.value = PranayamaSessionSnapshot(
+      preset: _activePranayamaPreset,
+      elapsed: _currentPranayamaElapsed,
+      isPaused: _isPranayamaPaused,
+    );
+  }
+
   Future<void> _beginPranayamaPreset(PranayamaPreset preset) async {
     final startGeneration = ++_pranayamaStartGeneration;
     _recordRecentPranayamaPreset(preset);
@@ -1270,7 +1284,9 @@ class _HomeScreenState extends State<HomeScreen> {
       _isPranayamaPaused = false;
       _pranayamaAudioPresetKey = null;
     });
+    _notifyPranayamaSession();
     unawaited(_backgroundTimerService.start());
+    _cachePranayamaSegmentTones(preset);
     // Start the clock after audio is ready. On Linux and Android the first play
     // call can take a beat to reach the backend, and starting the visual clock
     // first makes the dot drift ahead of the tone.
@@ -1286,6 +1302,7 @@ class _HomeScreenState extends State<HomeScreen> {
     setState(() {
       _pranayamaStartedAt = DateTime.now();
     });
+    _notifyPranayamaSession();
     _ensurePranayamaTicker();
   }
 
@@ -1304,6 +1321,7 @@ class _HomeScreenState extends State<HomeScreen> {
         _pranayamaStartedAt = null;
         _isPranayamaPaused = true;
       });
+      _notifyPranayamaSession();
       unawaited(_mutePranayamaAudio());
     }
   }
@@ -1315,6 +1333,8 @@ class _HomeScreenState extends State<HomeScreen> {
       _isPranayamaPaused = false;
       _pranayamaAudioPresetKey = null;
     });
+    _notifyPranayamaSession();
+    _cachePranayamaSegmentTones(preset);
     // Resume uses the same warmup path as a fresh start so audio and visuals
     // use one shared reference point.
     await _warmUpPranayamaAudioIfNeeded();
@@ -1329,6 +1349,7 @@ class _HomeScreenState extends State<HomeScreen> {
     setState(() {
       _pranayamaStartedAt = DateTime.now();
     });
+    _notifyPranayamaSession();
     _ensurePranayamaTicker();
   }
 
@@ -1353,6 +1374,7 @@ class _HomeScreenState extends State<HomeScreen> {
     } else {
       clearSession();
     }
+    _notifyPranayamaSession();
   }
 
   void _ensurePranayamaTicker() {
@@ -1375,7 +1397,9 @@ class _HomeScreenState extends State<HomeScreen> {
         return;
       }
 
+      unawaited(_syncPranayamaAudio());
       setState(() {});
+      _notifyPranayamaSession();
     });
   }
 
@@ -1412,21 +1436,31 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
 
-    final presetKey = _pranayamaToneCacheKey(preset);
+    final segmentPosition = _pranayamaSegmentAtElapsed(
+      preset,
+      _currentPranayamaElapsed,
+    );
+    final segment = segmentPosition.segment;
+    final presetKey =
+        '${preset.id}:${segmentPosition.index}:${_pranayamaToneCacheKeyForSegment(segment)}';
     if (!forceRestart && presetKey == _pranayamaAudioPresetKey) {
       return;
     }
 
     _pranayamaAudioPresetKey = presetKey;
-    final toneBytes = _toneBytesForPranayamaPreset(preset);
+    final toneClip = _toneClipForPranayamaSegment(segment);
     final audioPlayer = _pranayamaAudioPlayer ??= AudioPlayer();
-    final cycleDuration = _pranayamaCycleDuration(preset);
-    // Generated audio is one complete breath cycle loop. When changing sound
-    // settings mid-session, seek back to the matching point inside the cycle.
+    // Generated audio is a long whole-cycle clip. Looping every single breath
+    // cycle caused small platform loop delays to accumulate until the tone
+    // lagged behind the wall-clock visual guide.
+    final clipDurationMilliseconds = math.max(
+      1,
+      toneClip.duration.inMilliseconds,
+    );
     final seekPosition = Duration(
       milliseconds:
-          _currentPranayamaElapsed.inMilliseconds %
-          cycleDuration.inMilliseconds,
+          segmentPosition.localElapsed.inMilliseconds %
+          clipDurationMilliseconds,
     );
     final audioGeneration = ++_pranayamaAudioGeneration;
     // Serialize stop/play/seek calls. Some platform players dislike overlapping
@@ -1438,9 +1472,9 @@ class _HomeScreenState extends State<HomeScreen> {
       if (audioGeneration != _pranayamaAudioGeneration) {
         return;
       }
-      await audioPlayer.setReleaseMode(ReleaseMode.loop);
+      await audioPlayer.setReleaseMode(toneClip.releaseMode);
       await audioPlayer.play(
-        BytesSource(toneBytes, mimeType: 'audio/wav'),
+        BytesSource(toneClip.bytes, mimeType: 'audio/wav'),
         volume: 1,
       );
       if (audioGeneration != _pranayamaAudioGeneration) {
@@ -1473,12 +1507,18 @@ class _HomeScreenState extends State<HomeScreen> {
     unawaited(_pranayamaAudioPlayer?.dispose() ?? Future.value());
   }
 
-  Uint8List _toneBytesForPranayamaPreset(PranayamaPreset preset) {
-    final cacheKey = _pranayamaToneCacheKey(preset);
+  _PranayamaToneClip _toneClipForPranayamaSegment(PranayamaSegment segment) {
+    final cacheKey = _pranayamaToneCacheKeyForSegment(segment);
     return _pranayamaToneCache.putIfAbsent(
       cacheKey,
-      () => _generatePranayamaCycleToneBytes(preset),
+      () => _generatePranayamaToneClip(segment),
     );
+  }
+
+  void _cachePranayamaSegmentTones(PranayamaPreset preset) {
+    for (final segment in preset.segments) {
+      _toneClipForPranayamaSegment(segment);
+    }
   }
 
   Duration get _currentPranayamaElapsed {

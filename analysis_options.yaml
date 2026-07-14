@@ -9,6 +9,14 @@
 # packages, and plugins designed to encourage good coding practices.
 include: package:flutter_lints/flutter.yaml
 
+analyzer:
+  exclude:
+    # Local F-Droid tooling checkouts live under the project folder on this
+    # machine, but they are not part of the Flutter app package.
+    - fdroid-submission/**
+    - fdroiddata/**
+    - fdroidserver/**
+
 linter:
   # The lint rules applied to this project can be customized in the
   # section below to disable rules from the `package:flutter_lints/flutter.yaml`

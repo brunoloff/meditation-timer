@@ -207,7 +207,7 @@ void main() {
     expect(find.text('Breath work'), findsOneWidget);
   });
 
-  testWidgets('pranayama session survives a meditation route round trip', (
+  testWidgets('meditation discard stops a concurrent pranayama session', (
     WidgetTester tester,
   ) async {
     SharedPreferences.setMockInitialValues({'soundEnabled': false});
@@ -240,9 +240,237 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('pranayama-tab-button')));
     await tester.pumpAndSettle();
 
-    expect(find.text('Inhale'), findsOneWidget);
-    expect(find.byKey(const ValueKey('stop-pranayama-button')), findsOneWidget);
+    expect(find.text('Ready'), findsOneWidget);
+    expect(find.text('Paused'), findsNothing);
+    final stopButton = tester.widget<OutlinedButton>(
+      find.byKey(const ValueKey('stop-pranayama-button')),
+    );
+    expect(stopButton.enabled, isFalse);
     expect(find.text('6 in 8 out'), findsWidgets);
+  });
+
+  test('finite pranayama segments complete whole breath cycles', () {
+    const preset = PranayamaPreset(
+      id: 'test-multi-segment',
+      name: 'Multi segment',
+      segments: [
+        PranayamaSegment(
+          id: 'segment-one',
+          duration: Duration(seconds: 5),
+          inBreath: Duration(seconds: 3),
+          firstHold: Duration.zero,
+          outBreath: Duration(seconds: 3),
+          secondHold: Duration.zero,
+        ),
+        PranayamaSegment(
+          id: 'segment-two',
+          duration: Duration(seconds: 7),
+          inBreath: Duration(seconds: 2),
+          firstHold: Duration.zero,
+          outBreath: Duration(seconds: 2),
+          secondHold: Duration.zero,
+        ),
+      ],
+    );
+
+    expect(
+      effectivePranayamaDurationForTesting(preset),
+      const Duration(seconds: 14),
+    );
+    expect(
+      pranayamaSegmentAtElapsedForTesting(
+        preset,
+        const Duration(milliseconds: 5999),
+      ).segment.id,
+      'segment-one',
+    );
+    expect(
+      pranayamaSegmentAtElapsedForTesting(
+        preset,
+        const Duration(seconds: 6),
+      ).segment.id,
+      'segment-two',
+    );
+  });
+
+  test('pranayama tone clips are longer than one breath cycle', () {
+    const finiteSegment = PranayamaSegment(
+      id: 'finite-tone',
+      duration: Duration(minutes: 15),
+      inBreath: Duration(seconds: 4),
+      firstHold: Duration.zero,
+      outBreath: Duration(seconds: 5),
+      secondHold: Duration.zero,
+    );
+    const infiniteSegment = PranayamaSegment(
+      id: 'infinite-tone',
+      duration: null,
+      inBreath: Duration(seconds: 6),
+      firstHold: Duration.zero,
+      outBreath: Duration(seconds: 8),
+      secondHold: Duration.zero,
+    );
+
+    expect(
+      pranayamaToneClipDurationForTesting(finiteSegment),
+      effectivePranayamaDurationForTesting(
+        const PranayamaPreset(
+          id: 'finite-tone-preset',
+          name: 'Finite tone',
+          segments: [finiteSegment],
+        ),
+      ),
+    );
+    expect(
+      pranayamaToneClipDurationForTesting(infiniteSegment),
+      greaterThan(infiniteSegment.cycleDuration * 80),
+    );
+  });
+
+  testWidgets('meditation screen can launch and pause pranayama presets', (
+    WidgetTester tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({'soundEnabled': false});
+    await tester.binding.setSurfaceSize(const Size(800, 1200));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    await tester.pumpWidget(const BreathAndInsightTimerApp());
+    await tester.pump();
+
+    await tester.tap(find.byKey(const ValueKey('timer-Quick 20 minutes-root')));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const ValueKey('select-pranayama-preset-button')),
+      findsOneWidget,
+    );
+
+    await tester.tap(
+      find.byKey(const ValueKey('select-pranayama-preset-button')),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Select preset'), findsOneWidget);
+    expect(find.text('Recent presets'), findsOneWidget);
+    expect(find.text('Presets'), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('pranayama-6 in 8 out-root')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 20));
+
+    expect(find.text('Meditation'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('meditation-pranayama-panel')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('stop-meditation-pranayama-button')),
+      findsOneWidget,
+    );
+    expect(find.text('Inhale'), findsOneWidget);
+    expect(find.textContaining('Clock: 12:'), findsOneWidget);
+    expect(find.text('Breaths: 0'), findsOneWidget);
+
+    await tester.tap(find.byIcon(Icons.pause_rounded));
+    await tester.pump();
+
+    expect(find.text('Paused'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('Resume'));
+    await tester.pump();
+
+    expect(find.text('Paused'), findsNothing);
+    expect(find.text('Inhale'), findsOneWidget);
+
+    await tester.tap(
+      find.byKey(const ValueKey('stop-meditation-pranayama-button')),
+    );
+    await tester.pump();
+
+    expect(
+      find.byKey(const ValueKey('meditation-pranayama-panel')),
+      findsNothing,
+    );
+    expect(
+      find.byKey(const ValueKey('select-pranayama-preset-button')),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('pranayama editor can create multi-segment presets', (
+    WidgetTester tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(800, 1400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    await tester.pumpWidget(const BreathAndInsightTimerApp());
+    await tester.pump();
+
+    await tester.tap(find.byKey(const ValueKey('pranayama-tab-button')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('add-pranayama-preset-button')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Segments'), findsOneWidget);
+    expect(find.text('Segment 1'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('add-pranayama-segment-button')),
+      findsOneWidget,
+    );
+
+    await tester.tap(
+      find.byKey(const ValueKey('add-pranayama-segment-button')),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Segment 2'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('duration-infinite-checkbox')),
+      findsOneWidget,
+    );
+
+    await tester.tap(find.byKey(const ValueKey('duration-infinite-checkbox')));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const ValueKey('pranayama-in-breath-field')).last,
+      '4',
+    );
+    await tester.enterText(
+      find.byKey(const ValueKey('pranayama-in-breath-field')).last,
+      '',
+    );
+    TextField inBreathField = tester.widget(
+      find
+          .descendant(
+            of: find.byKey(const ValueKey('pranayama-in-breath-field')).last,
+            matching: find.byType(TextField),
+          )
+          .last,
+    );
+    expect(inBreathField.controller?.text, '');
+    await tester.enterText(
+      find.byKey(const ValueKey('pranayama-in-breath-field')).last,
+      '6',
+    );
+    inBreathField = tester.widget(
+      find
+          .descendant(
+            of: find.byKey(const ValueKey('pranayama-in-breath-field')).last,
+            matching: find.byType(TextField),
+          )
+          .last,
+    );
+    expect(inBreathField.controller?.text, '6');
+    await tester.enterText(
+      find.byKey(const ValueKey('pranayama-out-breath-field')).last,
+      '5',
+    );
+
+    await tester.tap(find.byKey(const ValueKey('save-timer-edit-button')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('New preset'), findsOneWidget);
+    expect(find.text('Infinite | 2 segments'), findsOneWidget);
   });
 
   testWidgets('sound setting can be disabled and is remembered', (
@@ -1225,15 +1453,50 @@ void main() {
         matching: find.byType(TextField),
       ),
     );
-    expect(hoursField.controller?.text, '0');
-    expect(minutesField.controller?.text, '00');
-    expect(secondsField.controller?.text, '00');
+    expect(hoursField.controller?.text, 'bananas');
+    expect(minutesField.controller?.text, '-12');
+    expect(secondsField.controller?.text, '');
 
     await tester.tap(find.byKey(const ValueKey('save-timer-edit-button')));
     await tester.pumpAndSettle();
 
     expect(find.text('Messy input timer'), findsOneWidget);
     expect(find.text('1 second'), findsOneWidget);
+  });
+
+  testWidgets('duration fields can be cleared while editing', (
+    WidgetTester tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(800, 1000));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    await tester.pumpWidget(const BreathAndInsightTimerApp());
+    await tester.pump();
+
+    await tester.tap(find.byKey(const ValueKey('add-timer-button')));
+    await tester.pumpAndSettle();
+
+    final minutesFinder = find.byKey(const ValueKey('duration-minutes-field'));
+    await tester.enterText(minutesFinder, '10');
+    await tester.enterText(minutesFinder, '1');
+    await tester.enterText(minutesFinder, '');
+
+    TextField minutesField = tester.widget(
+      find.descendant(of: minutesFinder, matching: find.byType(TextField)),
+    );
+    expect(minutesField.controller?.text, '');
+
+    await tester.enterText(minutesFinder, '6');
+    minutesField = tester.widget(
+      find.descendant(of: minutesFinder, matching: find.byType(TextField)),
+    );
+    expect(minutesField.controller?.text, '6');
+
+    await tester.tap(find.byKey(const ValueKey('save-timer-edit-button')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('New timer'), findsOneWidget);
+    expect(find.text('6 minutes'), findsOneWidget);
   });
 
   testWidgets('bell sound fields open a filterable sound selection screen', (
