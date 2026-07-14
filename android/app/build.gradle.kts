@@ -1,7 +1,8 @@
+import com.android.build.gradle.internal.api.ApkVariantOutputImpl
+
 plugins {
     id("com.android.application")
-    id("kotlin-android")
-    // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
+    // The Flutter Gradle Plugin must be applied after the Android Gradle plugin.
     id("dev.flutter.flutter-gradle-plugin")
 }
 
@@ -13,10 +14,6 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
-    }
-
-    kotlinOptions {
-        jvmTarget = JavaVersion.VERSION_17.toString()
     }
 
     defaultConfig {
@@ -34,6 +31,23 @@ android {
             // F-Droid builds and signs release APKs in its own reproducible
             // build environment. Keep this unsigned locally unless a separate
             // private signing config is supplied outside version control.
+        }
+    }
+}
+
+kotlin {
+    compilerOptions {
+        jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17
+    }
+}
+
+android.applicationVariants.configureEach {
+    val variant = this
+    val abiCodes = mapOf("armeabi-v7a" to 1, "arm64-v8a" to 2, "x86_64" to 3)
+    variant.outputs.forEach { output ->
+        val abiVersionCode = abiCodes[output.filters.find { it.filterType == "ABI" }?.identifier]
+        if (abiVersionCode != null) {
+            (output as ApkVariantOutputImpl).versionCodeOverride = variant.versionCode * 10 + abiVersionCode
         }
     }
 }

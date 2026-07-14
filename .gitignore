@@ -49,3 +49,6 @@ breath-and-insight-logs.csv
 
 /fdroiddata/*
 /fdroidserver/*
+
+# FVM Version Cache
+.fvm/
