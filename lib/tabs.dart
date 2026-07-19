@@ -2,6 +2,7 @@ part of 'main.dart';
 
 class _TimersTab extends StatelessWidget {
   const _TimersTab({
+    required this.activeMeditationSession,
     required this.recentTimersCollapsed,
     required this.recentTimers,
     required this.isEditingTimerPositions,
@@ -18,8 +19,11 @@ class _TimersTab extends StatelessWidget {
     required this.onToggleFolder,
     required this.onReorderTimerEntry,
     required this.onStartTimer,
+    required this.onOpenActiveMeditationSession,
+    required this.onDiscardActiveMeditationSession,
   });
 
+  final _ActiveMeditationSessionInfo? activeMeditationSession;
   final bool recentTimersCollapsed;
   final List<MeditationTimerPreset> recentTimers;
   final bool isEditingTimerPositions;
@@ -36,6 +40,8 @@ class _TimersTab extends StatelessWidget {
   final ValueChanged<String> onToggleFolder;
   final ReorderCallback onReorderTimerEntry;
   final ValueChanged<MeditationTimerPreset> onStartTimer;
+  final VoidCallback onOpenActiveMeditationSession;
+  final VoidCallback onDiscardActiveMeditationSession;
 
   @override
   Widget build(BuildContext context) {
@@ -43,6 +49,14 @@ class _TimersTab extends StatelessWidget {
       key: const ValueKey('timers-tab'),
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        if (activeMeditationSession case final session?) ...[
+          _ActiveMeditationSessionCard(
+            session: session,
+            onTap: onOpenActiveMeditationSession,
+            onDismissed: onDiscardActiveMeditationSession,
+          ),
+          const SizedBox(height: 28),
+        ],
         _SectionHeader(
           title: 'Recent timers',
           actionLabel: recentTimersCollapsed ? 'Expand' : 'Minimize',
@@ -119,6 +133,128 @@ class _TimersTab extends StatelessWidget {
           ),
         const SizedBox(height: 420),
       ],
+    );
+  }
+}
+
+class _ActiveMeditationSessionInfo {
+  const _ActiveMeditationSessionInfo({
+    required this.timer,
+    required this.elapsed,
+  });
+
+  final MeditationTimerPreset timer;
+  final Duration elapsed;
+}
+
+class _ActiveMeditationSessionCard extends StatelessWidget {
+  const _ActiveMeditationSessionCard({
+    required this.session,
+    required this.onTap,
+    required this.onDismissed,
+  });
+
+  final _ActiveMeditationSessionInfo session;
+  final VoidCallback onTap;
+  final VoidCallback onDismissed;
+
+  @override
+  Widget build(BuildContext context) {
+    return Dismissible(
+      key: ValueKey('active-meditation-session-${session.timer.id}'),
+      direction: DismissDirection.horizontal,
+      background: const _ActiveMeditationDismissBackground(
+        alignment: Alignment.centerLeft,
+      ),
+      secondaryBackground: const _ActiveMeditationDismissBackground(
+        alignment: Alignment.centerRight,
+      ),
+      onDismissed: (_) => onDismissed(),
+      child: Material(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(8),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          key: const ValueKey('active-meditation-session-card'),
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(8),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+            child: Row(
+              children: [
+                const Icon(
+                  Icons.timer_outlined,
+                  color: Color(0xFF18181C),
+                  size: 24,
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        session.timer.name,
+                        style: const TextStyle(
+                          color: Color(0xFF111114),
+                          fontSize: 18,
+                          fontWeight: FontWeight.w600,
+                          letterSpacing: 0,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        _formatElapsed(session.elapsed),
+                        style: const TextStyle(
+                          color: Color(0xFF4B4B52),
+                          fontSize: 15,
+                          fontWeight: FontWeight.w500,
+                          letterSpacing: 0,
+                          fontFeatures: [FontFeature.tabularFigures()],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const Icon(
+                  Icons.arrow_forward_rounded,
+                  color: Color(0xFF18181C),
+                  size: 26,
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ActiveMeditationDismissBackground extends StatelessWidget {
+  const _ActiveMeditationDismissBackground({required this.alignment});
+
+  final Alignment alignment;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: const Color(0xFF6D2525),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Align(
+          alignment: alignment,
+          child: const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 20),
+            child: Icon(
+              Icons.delete_outline_rounded,
+              color: Colors.white,
+              size: 28,
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

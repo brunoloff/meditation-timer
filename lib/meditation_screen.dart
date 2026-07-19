@@ -13,6 +13,9 @@ class MeditationSessionScreen extends StatefulWidget {
     this.onBellPlayed,
     this.onDetachedEndingBellRequested,
     this.onSessionFinished,
+    this.onMinimizeRequested,
+    this.onSessionClosed,
+    this.onElapsedChanged,
     this.pranayamaSessionListenable,
     this.pranayamaEntries = const <PranayamaBrowserEntry>[],
     this.recentPranayamaPresets = const <PranayamaPreset>[],
@@ -32,6 +35,9 @@ class MeditationSessionScreen extends StatefulWidget {
   final ValueChanged<BellSound>? onBellPlayed;
   final ValueChanged<BellSound>? onDetachedEndingBellRequested;
   final ValueChanged<MeditationLogEntry>? onSessionFinished;
+  final VoidCallback? onMinimizeRequested;
+  final VoidCallback? onSessionClosed;
+  final ValueChanged<Duration>? onElapsedChanged;
   final ValueListenable<PranayamaSessionSnapshot>? pranayamaSessionListenable;
   final List<PranayamaBrowserEntry> pranayamaEntries;
   final List<PranayamaPreset> recentPranayamaPresets;
@@ -48,6 +54,9 @@ class MeditationSessionScreen extends StatefulWidget {
 class _MeditationSessionScreenState extends State<MeditationSessionScreen>
     with WidgetsBindingObserver {
   Timer? _timer;
+  final FocusNode _shortcutFocusNode = FocusNode(
+    debugLabel: 'Meditation session shortcuts',
+  );
   final AudioPlayer _audioPlayer = AudioPlayer();
   Duration _elapsed = Duration.zero;
   Duration _activeElapsedBeforeRun = Duration.zero;
@@ -74,6 +83,7 @@ class _MeditationSessionScreenState extends State<MeditationSessionScreen>
     unawaited(widget.setWakeLockEnabled(true));
     unawaited(widget.backgroundTimerService.start());
     _startTimer();
+    _requestShortcutFocus();
     if (widget.playBells && widget.timer.startingBell != null) {
       unawaited(_playBell(widget.timer.startingBell));
     } else if (widget.playBells) {
@@ -87,6 +97,7 @@ class _MeditationSessionScreenState extends State<MeditationSessionScreen>
     _timer?.cancel();
     unawaited(widget.setWakeLockEnabled(false));
     unawaited(widget.backgroundTimerService.stop());
+    _shortcutFocusNode.dispose();
     _audioPlayer.dispose();
     super.dispose();
   }
@@ -101,6 +112,17 @@ class _MeditationSessionScreenState extends State<MeditationSessionScreen>
   void _startTimer() {
     _timer?.cancel();
     _timer = Timer.periodic(const Duration(seconds: 1), (_) => _tickSession());
+  }
+
+  void _requestShortcutFocus() {
+    if (widget.onMinimizeRequested == null) {
+      return;
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && !_shortcutFocusNode.hasFocus) {
+        _shortcutFocusNode.requestFocus();
+      }
+    });
   }
 
   void _tickSession() {
@@ -122,6 +144,7 @@ class _MeditationSessionScreenState extends State<MeditationSessionScreen>
         _isRunning = false;
       }
     });
+    _notifyElapsedChanged(displayedElapsed);
 
     if (timerCompleted) {
       _timer?.cancel();
@@ -168,6 +191,7 @@ class _MeditationSessionScreenState extends State<MeditationSessionScreen>
       _elapsed = _activeElapsedBeforeRun;
       _isRunning = false;
     });
+    _notifyElapsedChanged(_activeElapsedBeforeRun);
   }
 
   void _resumeSession() {
@@ -204,6 +228,7 @@ class _MeditationSessionScreenState extends State<MeditationSessionScreen>
       _isCompleting = true;
       _isRunning = false;
     });
+    _notifyElapsedChanged(completedElapsed);
     _stopConcurrentPranayamaIfActive();
 
     if (playEndingBell &&
@@ -271,6 +296,10 @@ class _MeditationSessionScreenState extends State<MeditationSessionScreen>
     _endSession();
   }
 
+  void _discardFromHost() {
+    _discardSession();
+  }
+
   Future<void> _selectPranayamaPreset() async {
     final selectedPreset = await Navigator.of(context).push<PranayamaPreset>(
       MaterialPageRoute<PranayamaPreset>(
@@ -315,6 +344,11 @@ class _MeditationSessionScreenState extends State<MeditationSessionScreen>
     _stopConcurrentPranayamaIfActive();
     unawaited(widget.setWakeLockEnabled(false));
     unawaited(widget.backgroundTimerService.stop());
+    final onSessionClosed = widget.onSessionClosed;
+    if (onSessionClosed != null) {
+      onSessionClosed();
+      return;
+    }
     // When launched from HomeScreen, return to that existing route so concurrent
     // pranayama state/audio remains visible and controllable. Widget tests can
     // still mount this screen directly, so keep the in-place fallback below.
@@ -332,6 +366,10 @@ class _MeditationSessionScreenState extends State<MeditationSessionScreen>
       _prefersDisplayDimmed = false;
       _manuallyDimmedDuringRevealWindow = false;
     });
+  }
+
+  void _notifyElapsedChanged(Duration elapsed) {
+    widget.onElapsedChanged?.call(elapsed);
   }
 
   Future<void> _playBell(BellSound? bell) async {
@@ -363,6 +401,38 @@ class _MeditationSessionScreenState extends State<MeditationSessionScreen>
 
   @override
   Widget build(BuildContext context) {
+    final content = _buildSessionContent(context);
+    final onMinimizeRequested = widget.onMinimizeRequested;
+    if (onMinimizeRequested == null) {
+      return content;
+    }
+    _requestShortcutFocus();
+
+    return Focus(
+      focusNode: _shortcutFocusNode,
+      autofocus: true,
+      onKeyEvent: (_, event) {
+        if (event is KeyDownEvent &&
+            event.logicalKey == LogicalKeyboardKey.arrowLeft &&
+            HardwareKeyboard.instance.isAltPressed) {
+          onMinimizeRequested();
+          return KeyEventResult.handled;
+        }
+        return KeyEventResult.ignored;
+      },
+      child: PopScope<void>(
+        canPop: false,
+        onPopInvokedWithResult: (didPop, _) {
+          if (!didPop) {
+            onMinimizeRequested();
+          }
+        },
+        child: content,
+      ),
+    );
+  }
+
+  Widget _buildSessionContent(BuildContext context) {
     if (!_isSessionActive) {
       return const HomeScreen();
     }
@@ -962,6 +1032,10 @@ Future<void> _setWakeLockEnabled(bool enabled) async {
     }
   } on MissingPluginException {
     // Widget tests and unsupported platforms should not crash session timing.
+  } on Object {
+    // Some Linux desktop portals can reject or expire wakelock requests while
+    // the timer itself is behaving correctly. Treat wakelock as best-effort so
+    // desktop testing does not emit unhandled asynchronous exceptions.
   }
 }
 

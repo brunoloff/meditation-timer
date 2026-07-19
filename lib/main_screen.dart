@@ -1,9 +1,10 @@
 part of 'main.dart';
 
 class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key, this.openBackgroundSetupGuide});
+  const HomeScreen({super.key, this.openBackgroundSetupGuide, this.now});
 
   final Future<bool> Function()? openBackgroundSetupGuide;
+  final DateTime Function()? now;
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
@@ -56,6 +57,10 @@ class _HomeScreenState extends State<HomeScreen> {
   Timer? _pranayamaTicker;
   final ValueNotifier<PranayamaSessionSnapshot> _pranayamaSessionNotifier =
       ValueNotifier<PranayamaSessionSnapshot>(PranayamaSessionSnapshot.empty);
+  MeditationTimerPreset? _activeMeditationTimer;
+  Duration _activeMeditationElapsed = Duration.zero;
+  bool _isMeditationSessionVisible = false;
+  GlobalKey<_MeditationSessionScreenState>? _activeMeditationSessionKey;
 
   @override
   void initState() {
@@ -868,25 +873,68 @@ class _HomeScreenState extends State<HomeScreen> {
     // ringing from the previous summary screen.
     unawaited(_detachedEndingBellPlayer?.stop() ?? Future<void>.value());
     _recordRecentTimer(timer);
-    Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (_) => MeditationSessionScreen(
-          timer: timer,
-          playBells: _soundEnabled,
-          turnScreenOnNearAudio: _turnScreenOnNearAudio,
-          logStore: _logStore,
-          backgroundTimerService: _backgroundTimerService,
-          onDetachedEndingBellRequested: _playDetachedEndingBell,
-          pranayamaSessionListenable: _pranayamaSessionNotifier,
-          pranayamaEntries: _pranayamaEntries,
-          recentPranayamaPresets: _recentPranayamaPresets,
-          expandedPranayamaFolders: _expandedPranayamaFolders,
-          onStartPranayamaPreset: _startPranayamaPreset,
-          onTogglePranayamaPaused: _togglePranayamaPaused,
-          onStopPranayama: _stopPranayamaSession,
-        ),
-      ),
-    );
+    setState(() {
+      _activeMeditationTimer = timer;
+      _activeMeditationElapsed = Duration.zero;
+      _isMeditationSessionVisible = true;
+      _activeMeditationSessionKey = GlobalKey<_MeditationSessionScreenState>();
+    });
+  }
+
+  void _showActiveMeditationSession() {
+    if (_activeMeditationTimer == null) {
+      return;
+    }
+
+    setState(() {
+      _isMeditationSessionVisible = true;
+    });
+  }
+
+  void _minimizeActiveMeditationSession() {
+    if (_activeMeditationTimer == null) {
+      return;
+    }
+
+    setState(() {
+      _selectedTab = HomeTab.timers;
+      _isMeditationSessionVisible = false;
+    });
+  }
+
+  void _clearActiveMeditationSession() {
+    if (!mounted) {
+      return;
+    }
+
+    setState(() {
+      _activeMeditationTimer = null;
+      _activeMeditationElapsed = Duration.zero;
+      _isMeditationSessionVisible = false;
+      _activeMeditationSessionKey = null;
+      _selectedTab = HomeTab.timers;
+    });
+  }
+
+  void _discardActiveMeditationSession() {
+    final sessionState = _activeMeditationSessionKey?.currentState;
+    if (sessionState != null) {
+      sessionState._discardFromHost();
+      return;
+    }
+
+    _clearActiveMeditationSession();
+  }
+
+  void _updateActiveMeditationElapsed(Duration elapsed) {
+    if (_activeMeditationTimer == null ||
+        _activeMeditationElapsed.inSeconds == elapsed.inSeconds) {
+      return;
+    }
+
+    setState(() {
+      _activeMeditationElapsed = elapsed;
+    });
   }
 
   Future<void> _playDetachedEndingBell(BellSound bell) async {
@@ -1583,6 +1631,42 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final activeMeditationTimer = _activeMeditationTimer;
+    final activeMeditationSessionKey = _activeMeditationSessionKey;
+    final homeScaffold = _buildHomeScaffold();
+    if (activeMeditationTimer == null || activeMeditationSessionKey == null) {
+      return homeScaffold;
+    }
+
+    return IndexedStack(
+      index: _isMeditationSessionVisible ? 1 : 0,
+      children: [
+        homeScaffold,
+        MeditationSessionScreen(
+          key: activeMeditationSessionKey,
+          timer: activeMeditationTimer,
+          playBells: _soundEnabled,
+          turnScreenOnNearAudio: _turnScreenOnNearAudio,
+          logStore: _logStore,
+          backgroundTimerService: _backgroundTimerService,
+          now: widget.now ?? DateTime.now,
+          onDetachedEndingBellRequested: _playDetachedEndingBell,
+          onSessionClosed: _clearActiveMeditationSession,
+          onMinimizeRequested: _minimizeActiveMeditationSession,
+          onElapsedChanged: _updateActiveMeditationElapsed,
+          pranayamaSessionListenable: _pranayamaSessionNotifier,
+          pranayamaEntries: _pranayamaEntries,
+          recentPranayamaPresets: _recentPranayamaPresets,
+          expandedPranayamaFolders: _expandedPranayamaFolders,
+          onStartPranayamaPreset: _startPranayamaPreset,
+          onTogglePranayamaPaused: _togglePranayamaPaused,
+          onStopPranayama: _stopPranayamaSession,
+        ),
+      ],
+    );
+  }
+
+  Widget _buildHomeScaffold() {
     return Scaffold(
       backgroundColor: Colors.black,
       body: SafeArea(
@@ -1607,6 +1691,12 @@ class _HomeScreenState extends State<HomeScreen> {
                   padding: const EdgeInsets.fromLTRB(24, 24, 24, 48),
                   child: switch (_selectedTab) {
                     HomeTab.timers => _TimersTab(
+                      activeMeditationSession: _activeMeditationTimer == null
+                          ? null
+                          : _ActiveMeditationSessionInfo(
+                              timer: _activeMeditationTimer!,
+                              elapsed: _activeMeditationElapsed,
+                            ),
                       recentTimersCollapsed: _recentTimersCollapsed,
                       recentTimers: _recentTimers,
                       isEditingTimerPositions: _isEditingTimerPositions,
@@ -1623,6 +1713,10 @@ class _HomeScreenState extends State<HomeScreen> {
                       onToggleFolder: _toggleFolder,
                       onReorderTimerEntry: _reorderTimerEntry,
                       onStartTimer: _startTimer,
+                      onOpenActiveMeditationSession:
+                          _showActiveMeditationSession,
+                      onDiscardActiveMeditationSession:
+                          _discardActiveMeditationSession,
                     ),
                     HomeTab.pranayama => _PranayamaTab(
                       recentPresetsCollapsed: _recentPranayamaCollapsed,

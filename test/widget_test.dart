@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -211,10 +212,11 @@ void main() {
     WidgetTester tester,
   ) async {
     SharedPreferences.setMockInitialValues({'soundEnabled': false});
+    final clock = _TestClock();
     await tester.binding.setSurfaceSize(const Size(800, 1100));
     addTearDown(() => tester.binding.setSurfaceSize(null));
 
-    await tester.pumpWidget(const BreathAndInsightTimerApp());
+    await tester.pumpWidget(MaterialApp(home: HomeScreen(now: clock.now)));
     await tester.pump();
 
     await tester.tap(find.byKey(const ValueKey('pranayama-tab-button')));
@@ -665,6 +667,86 @@ void main() {
       findsNothing,
     );
   });
+
+  testWidgets(
+    'back minimizes active meditation and card can reopen or discard',
+    (WidgetTester tester) async {
+      SharedPreferences.setMockInitialValues({'soundEnabled': false});
+      final clock = _TestClock();
+      await tester.binding.setSurfaceSize(const Size(800, 1100));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+
+      await tester.pumpWidget(MaterialApp(home: HomeScreen(now: clock.now)));
+      await tester.pump();
+
+      await tester.tap(
+        find.byKey(const ValueKey('timer-Quick 20 minutes-root')),
+      );
+      await tester.pump();
+
+      expect(find.byIcon(Icons.pause_rounded), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('active-meditation-session-card')),
+        findsNothing,
+      );
+
+      await tester.binding.handlePopRoute();
+      await tester.pump();
+
+      final activeCard = find.byKey(
+        const ValueKey('active-meditation-session-card'),
+      );
+      expect(activeCard, findsOneWidget);
+      expect(find.byIcon(Icons.pause_rounded), findsNothing);
+      expect(
+        find.descendant(
+          of: activeCard,
+          matching: find.text('Quick 20 minutes'),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(of: activeCard, matching: find.text('00:00')),
+        findsOneWidget,
+      );
+
+      clock.advance(const Duration(seconds: 2));
+      await tester.pump(const Duration(seconds: 2));
+      expect(
+        find.descendant(of: activeCard, matching: find.text('00:02')),
+        findsOneWidget,
+      );
+
+      await tester.tap(activeCard);
+      await tester.pump();
+
+      expect(find.byIcon(Icons.pause_rounded), findsOneWidget);
+      expect(find.text('19:58'), findsOneWidget);
+
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.altLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.altLeft);
+      await tester.pump();
+
+      expect(activeCard, findsOneWidget);
+      expect(find.byIcon(Icons.pause_rounded), findsNothing);
+
+      await tester.tap(activeCard);
+      await tester.pump();
+
+      await tester.binding.handlePopRoute();
+      await tester.pump();
+      await tester.drag(activeCard, const Offset(700, 0));
+      await tester.pumpAndSettle();
+
+      expect(activeCard, findsNothing);
+      expect(find.byIcon(Icons.pause_rounded), findsNothing);
+      expect(
+        find.byKey(const ValueKey('timer-Quick 20 minutes-root')),
+        findsOneWidget,
+      );
+    },
+  );
 
   testWidgets('legacy saved bell assets are remapped to current sounds', (
     WidgetTester tester,
