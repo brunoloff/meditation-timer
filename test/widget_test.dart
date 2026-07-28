@@ -1327,6 +1327,69 @@ void main() {
     expect(find.text('Infinite'), findsWidgets);
   });
 
+  testWidgets('timer editor saves preparation time', (
+    WidgetTester tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(800, 1000));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    await tester.pumpWidget(const BreathAndInsightTimerApp());
+    await tester.pump();
+
+    await tester.tap(find.byKey(const ValueKey('add-timer-button')));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const ValueKey('edit-timer-title-button')));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const ValueKey('timer-title-field')),
+      'Timer with prep',
+    );
+    await tester.tap(find.byKey(const ValueKey('save-timer-title-button')));
+    await tester.pumpAndSettle();
+
+    await tester.ensureVisible(
+      find.byKey(const ValueKey('preparation-minutes-field')),
+    );
+    await tester.enterText(
+      find.byKey(const ValueKey('preparation-minutes-field')),
+      '1',
+    );
+    await tester.enterText(
+      find.byKey(const ValueKey('preparation-seconds-field')),
+      '75',
+    );
+
+    final preparationMinutesField = tester.widget<TextField>(
+      find.descendant(
+        of: find.byKey(const ValueKey('preparation-minutes-field')),
+        matching: find.byType(TextField),
+      ),
+    );
+    final preparationSecondsField = tester.widget<TextField>(
+      find.descendant(
+        of: find.byKey(const ValueKey('preparation-seconds-field')),
+        matching: find.byType(TextField),
+      ),
+    );
+    expect(preparationMinutesField.controller?.text, '02');
+    expect(preparationSecondsField.controller?.text, '15');
+
+    await tester.tap(find.byKey(const ValueKey('save-timer-edit-button')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Timer with prep'), findsOneWidget);
+    expect(find.text('20 minutes + 2 minutes 15 seconds prep'), findsOneWidget);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump();
+    await tester.pumpWidget(const BreathAndInsightTimerApp());
+    await tester.pump();
+
+    expect(find.text('Timer with prep'), findsOneWidget);
+    expect(find.text('20 minutes + 2 minutes 15 seconds prep'), findsOneWidget);
+  });
+
   testWidgets('existing timer can be edited from position edit mode', (
     WidgetTester tester,
   ) async {
@@ -2673,6 +2736,80 @@ bad-date,0:10:0,Broken,Meditation
       expect(find.text('Timers'), findsWidgets);
     },
   );
+
+  testWidgets('preparation time delays starting bell and meditation clock', (
+    WidgetTester tester,
+  ) async {
+    final clock = _TestClock(DateTime(2026, 7, 28, 6));
+    final playedBells = <String>[];
+    MeditationLogEntry? loggedEntry;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MeditationSessionScreen(
+          now: clock.now,
+          onBellPlayed: (bell) => playedBells.add(bell.name),
+          onSessionFinished: (entry) {
+            loggedEntry = entry;
+          },
+          timer: const MeditationTimerPreset(
+            id: 'preparation-session',
+            name: 'Preparation session',
+            duration: Duration(seconds: 3),
+            preparationDuration: Duration(seconds: 2),
+            startingBell: BellSound(
+              name: 'Start',
+              assetPath: 'audio/bells/wood-knock.mp3',
+            ),
+            endingBell: BellSound(
+              name: 'End',
+              assetPath: 'audio/bells/wood-knock.mp3',
+            ),
+          ),
+        ),
+      ),
+    );
+
+    expect(find.text('Preparation'), findsOneWidget);
+    expect(find.text('00:02'), findsOneWidget);
+    expect(playedBells, isEmpty);
+
+    clock.advance(const Duration(seconds: 1));
+    await tester.pump(const Duration(seconds: 1));
+
+    expect(find.text('Preparation'), findsOneWidget);
+    expect(find.text('00:01'), findsOneWidget);
+    expect(playedBells, isEmpty);
+
+    clock.advance(const Duration(seconds: 1));
+    await tester.pump(const Duration(seconds: 1));
+
+    expect(playedBells, ['Start']);
+    expect(find.text('Preparation'), findsNothing);
+    expect(find.text('00:03'), findsOneWidget);
+
+    clock.advance(const Duration(seconds: 1));
+    await tester.pump(const Duration(seconds: 1));
+
+    expect(find.text('00:02'), findsOneWidget);
+
+    clock.advance(const Duration(seconds: 2));
+    await tester.pump(const Duration(seconds: 2));
+    await tester.pumpAndSettle();
+
+    expect(playedBells, ['Start', 'End']);
+    expect(find.text('Summary'), findsOneWidget);
+    expect(find.text('You completed:'), findsOneWidget);
+    expect(find.text('00:03'), findsWidgets);
+    expect(loggedEntry, isNull);
+
+    await tester.tap(find.byKey(const ValueKey('summary-continue-button')));
+    await tester.pumpAndSettle();
+
+    expect(loggedEntry, isNotNull);
+    expect(loggedEntry?.duration, const Duration(seconds: 3));
+    expect(loggedEntry?.startedAt, DateTime(2026, 7, 28, 6, 0, 2));
+  });
 
   testWidgets('natural timed completion plays ending bell and shows summary', (
     WidgetTester tester,

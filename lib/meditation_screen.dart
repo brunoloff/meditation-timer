@@ -59,9 +59,12 @@ class _MeditationSessionScreenState extends State<MeditationSessionScreen>
   );
   final AudioPlayer _audioPlayer = AudioPlayer();
   Duration _elapsed = Duration.zero;
+  // Raw session time includes preparation. The public meditation clock and logs
+  // subtract preparation time so existing statistics keep their meaning.
   Duration _activeElapsedBeforeRun = Duration.zero;
   late final DateTime _startedAt;
   DateTime? _runStartedAt;
+  DateTime? _meditationStartedAt;
   int _lastProcessedElapsedSecond = 0;
   bool _isRunning = true;
   bool _isSessionActive = true;
@@ -84,11 +87,7 @@ class _MeditationSessionScreenState extends State<MeditationSessionScreen>
     unawaited(widget.backgroundTimerService.start());
     _startTimer();
     _requestShortcutFocus();
-    if (widget.playBells && widget.timer.startingBell != null) {
-      unawaited(_playBell(widget.timer.startingBell));
-    } else if (widget.playBells) {
-      unawaited(_playDueIntermediateBell(Duration.zero));
-    }
+    _startMeditationIfReady(Duration.zero);
   }
 
   @override
@@ -130,7 +129,17 @@ class _MeditationSessionScreenState extends State<MeditationSessionScreen>
       return;
     }
 
-    final nextElapsed = _currentElapsed();
+    final sessionElapsed = _currentSessionElapsed();
+    _startMeditationIfReady(sessionElapsed);
+    final nextElapsed = _currentElapsedFromSessionElapsed(sessionElapsed);
+    if (_meditationStartedAt == null) {
+      setState(() {
+        _elapsed = Duration.zero;
+      });
+      _notifyElapsedChanged(Duration.zero);
+      return;
+    }
+
     final timerCompleted =
         !widget.timer.isInfinite && nextElapsed >= widget.timer.duration!;
     final displayedElapsed = timerCompleted
@@ -148,7 +157,7 @@ class _MeditationSessionScreenState extends State<MeditationSessionScreen>
 
     if (timerCompleted) {
       _timer?.cancel();
-      _activeElapsedBeforeRun = displayedElapsed;
+      _activeElapsedBeforeRun = sessionElapsed;
       _runStartedAt = null;
       _lastProcessedElapsedSecond = displayedElapsedSecond;
       unawaited(_completeSession(playEndingBell: true, forceEndingBell: true));
@@ -160,7 +169,7 @@ class _MeditationSessionScreenState extends State<MeditationSessionScreen>
   }
 
   void _toggleDisplayDimmed() {
-    final shouldReveal = _shouldRevealDisplay(_sessionElapsedForDisplayState());
+    final shouldReveal = _shouldRevealDisplay(_sessionClockForDisplayState());
     final screenDimmed =
         _prefersDisplayDimmed &&
         (_manuallyDimmedDuringRevealWindow || !shouldReveal);
@@ -185,13 +194,16 @@ class _MeditationSessionScreenState extends State<MeditationSessionScreen>
     }
 
     _timer?.cancel();
-    _activeElapsedBeforeRun = _currentElapsed();
+    _activeElapsedBeforeRun = _currentSessionElapsed();
     _runStartedAt = null;
+    final meditationElapsed = _currentElapsedFromSessionElapsed(
+      _activeElapsedBeforeRun,
+    );
     setState(() {
-      _elapsed = _activeElapsedBeforeRun;
+      _elapsed = meditationElapsed;
       _isRunning = false;
     });
-    _notifyElapsedChanged(_activeElapsedBeforeRun);
+    _notifyElapsedChanged(meditationElapsed);
   }
 
   void _resumeSession() {
@@ -220,8 +232,12 @@ class _MeditationSessionScreenState extends State<MeditationSessionScreen>
     }
 
     _timer?.cancel();
-    final completedElapsed = _completedElapsed();
-    _activeElapsedBeforeRun = completedElapsed;
+    final completedSessionElapsed = _currentSessionElapsed();
+    _startMeditationIfReady(completedSessionElapsed);
+    final completedElapsed = _completedElapsedFromSessionElapsed(
+      completedSessionElapsed,
+    );
+    _activeElapsedBeforeRun = completedSessionElapsed;
     _runStartedAt = null;
     setState(() {
       _elapsed = completedElapsed;
@@ -246,7 +262,7 @@ class _MeditationSessionScreenState extends State<MeditationSessionScreen>
 
     final entry = MeditationLogEntry(
       id: _newLogId(),
-      startedAt: _startedAt,
+      startedAt: _meditationStartedAt ?? _startedAt,
       duration: completedElapsed,
       preset: widget.timer.name,
       activity: widget.timer.activity,
@@ -363,9 +379,31 @@ class _MeditationSessionScreenState extends State<MeditationSessionScreen>
       _activeElapsedBeforeRun = Duration.zero;
       _runStartedAt = null;
       _lastProcessedElapsedSecond = 0;
+      _meditationStartedAt = null;
       _prefersDisplayDimmed = false;
       _manuallyDimmedDuringRevealWindow = false;
     });
+  }
+
+  void _startMeditationIfReady(Duration sessionElapsed) {
+    if (_meditationStartedAt != null ||
+        sessionElapsed < _preparationDuration()) {
+      return;
+    }
+
+    final meditationElapsed = _currentElapsedFromSessionElapsed(sessionElapsed);
+    _meditationStartedAt = widget.now().subtract(meditationElapsed);
+    _lastProcessedElapsedSecond = 0;
+
+    if (!widget.playBells) {
+      return;
+    }
+
+    if (widget.timer.startingBell != null) {
+      unawaited(_playBell(widget.timer.startingBell));
+    } else {
+      unawaited(_playDueIntermediateBell(Duration.zero));
+    }
   }
 
   void _notifyElapsedChanged(Duration elapsed) {
@@ -448,8 +486,9 @@ class _MeditationSessionScreenState extends State<MeditationSessionScreen>
     }
 
     final displayedTime = _displayedSessionTime();
-    final elapsedForDisplay = _sessionElapsedForDisplayState();
-    final shouldReveal = _shouldRevealDisplay(elapsedForDisplay);
+    final sessionElapsedForDisplay = _sessionClockForDisplayState();
+    final isPreparing = _isPreparingForDisplayState();
+    final shouldReveal = _shouldRevealDisplay(sessionElapsedForDisplay);
     final screenDimmed =
         _prefersDisplayDimmed &&
         (_manuallyDimmedDuringRevealWindow || !shouldReveal);
@@ -492,7 +531,9 @@ class _MeditationSessionScreenState extends State<MeditationSessionScreen>
                       child: Text(
                         _formatElapsed(displayedTime),
                         textAlign: TextAlign.center,
-                        semanticsLabel: widget.timer.isInfinite
+                        semanticsLabel: isPreparing
+                            ? 'Preparation time remaining ${_formatElapsed(displayedTime)}'
+                            : widget.timer.isInfinite
                             ? 'Elapsed time ${_formatElapsed(displayedTime)}'
                             : 'Time remaining ${_formatElapsed(displayedTime)}',
                         style: const TextStyle(
@@ -505,6 +546,20 @@ class _MeditationSessionScreenState extends State<MeditationSessionScreen>
                         ),
                       ),
                     ),
+                    if (isPreparing) ...[
+                      const SizedBox(height: 16),
+                      const Center(
+                        child: Text(
+                          'Preparation',
+                          style: TextStyle(
+                            color: Color(0xFF77777C),
+                            fontSize: 24,
+                            fontWeight: FontWeight.w400,
+                            letterSpacing: 0,
+                          ),
+                        ),
+                      ),
+                    ],
                     const Spacer(flex: 4),
                     SizedBox(
                       width: double.infinity,
@@ -558,6 +613,11 @@ class _MeditationSessionScreenState extends State<MeditationSessionScreen>
   }
 
   Duration _displayedSessionTime() {
+    if (_isPreparingForDisplayState()) {
+      final remaining = _preparationDuration() - _sessionClockForDisplayState();
+      return remaining.isNegative ? Duration.zero : remaining;
+    }
+
     final elapsed = _sessionElapsedForDisplayState();
     if (widget.timer.isInfinite) {
       return elapsed;
@@ -575,17 +635,34 @@ class _MeditationSessionScreenState extends State<MeditationSessionScreen>
     return _elapsed;
   }
 
-  bool _shouldRevealDisplay(Duration elapsed) {
+  Duration _sessionClockForDisplayState() {
+    if (_isRunning) {
+      return _currentSessionElapsed();
+    }
+
+    return _activeElapsedBeforeRun;
+  }
+
+  bool _isPreparingForDisplayState() {
+    return _meditationStartedAt == null &&
+        _sessionClockForDisplayState() < _preparationDuration();
+  }
+
+  bool _shouldRevealDisplay(Duration sessionElapsed) {
     if (!widget.playBells || !widget.turnScreenOnNearAudio) {
       return false;
     }
 
     return _bellVisibilityWindows(widget.timer).any((window) {
-      return elapsed >= window.start && elapsed <= window.end;
+      return sessionElapsed >= window.start && sessionElapsed <= window.end;
     });
   }
 
   Duration _currentElapsed() {
+    return _currentElapsedFromSessionElapsed(_currentSessionElapsed());
+  }
+
+  Duration _currentSessionElapsed() {
     final runStartedAt = _runStartedAt;
     if (!_isRunning || runStartedAt == null) {
       return _activeElapsedBeforeRun;
@@ -596,8 +673,18 @@ class _MeditationSessionScreenState extends State<MeditationSessionScreen>
     return elapsed.isNegative ? Duration.zero : elapsed;
   }
 
-  Duration _completedElapsed() {
-    final elapsed = _currentElapsed();
+  Duration _currentElapsedFromSessionElapsed(Duration sessionElapsed) {
+    final meditationElapsed = sessionElapsed - _preparationDuration();
+    return meditationElapsed.isNegative ? Duration.zero : meditationElapsed;
+  }
+
+  Duration _preparationDuration() {
+    final preparationDuration = widget.timer.preparationDuration;
+    return preparationDuration.isNegative ? Duration.zero : preparationDuration;
+  }
+
+  Duration _completedElapsedFromSessionElapsed(Duration sessionElapsed) {
+    final elapsed = _currentElapsedFromSessionElapsed(sessionElapsed);
     if (!widget.timer.isInfinite && elapsed >= widget.timer.duration!) {
       return widget.timer.duration!;
     }
@@ -1052,6 +1139,9 @@ List<_BellVisibilityWindow> _bellVisibilityWindows(
   const revealBeforeBell = Duration(seconds: 10);
   const revealAfterBell = Duration(seconds: 30);
   final windows = <_BellVisibilityWindow>[];
+  final preparationDuration = timer.preparationDuration.isNegative
+      ? Duration.zero
+      : timer.preparationDuration;
 
   void addWindow(Duration bellTime) {
     final start = bellTime - revealBeforeBell;
@@ -1063,19 +1153,24 @@ List<_BellVisibilityWindow> _bellVisibilityWindows(
     );
   }
 
+  if (timer.startingBell != null) {
+    addWindow(preparationDuration);
+  }
+
   final timerDuration = timer.duration;
   if (timerDuration != null && timer.endingBell != null) {
-    addWindow(timerDuration);
+    addWindow(preparationDuration + timerDuration);
   }
 
   for (final bell in timer.intermediateBells) {
     if (timerDuration == null) {
-      addWindow(bell.startTime);
+      addWindow(preparationDuration + bell.startTime);
       final repeatInterval = bell.repeatInterval;
       if (repeatInterval != null && repeatInterval.inSeconds > 0) {
         for (var repeatIndex = 1; repeatIndex <= 48; repeatIndex += 1) {
           addWindow(
-            bell.startTime +
+            preparationDuration +
+                bell.startTime +
                 Duration(
                   microseconds: repeatInterval.inMicroseconds * repeatIndex,
                 ),
@@ -1088,7 +1183,7 @@ List<_BellVisibilityWindow> _bellVisibilityWindows(
     var bellTime = bell.startTime;
     final repeatInterval = bell.repeatInterval;
     while (bellTime < timerDuration) {
-      addWindow(bellTime);
+      addWindow(preparationDuration + bellTime);
       if (repeatInterval == null || repeatInterval.inSeconds <= 0) {
         break;
       }
@@ -1443,9 +1538,12 @@ String _formatClockDuration(Duration duration) {
 }
 
 String _timerDetails(MeditationTimerPreset timer) {
-  final duration = timer.isInfinite
+  final baseDuration = timer.isInfinite
       ? 'Infinite'
       : _formatDuration(timer.duration!);
+  final duration = timer.preparationDuration > Duration.zero
+      ? '$baseDuration + ${_formatDuration(timer.preparationDuration)} prep'
+      : baseDuration;
 
   final note = timer.note.trim();
   return note.isEmpty ? duration : '$duration | $note';

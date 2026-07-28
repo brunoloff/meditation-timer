@@ -22,11 +22,15 @@ class _TimerEditScreenState extends State<TimerEditScreen> {
   late final TextEditingController _hoursController;
   late final TextEditingController _minutesController;
   late final TextEditingController _secondsController;
+  late final TextEditingController _preparationHoursController;
+  late final TextEditingController _preparationMinutesController;
+  late final TextEditingController _preparationSecondsController;
   late final List<_EditableIntermediateBell> _intermediateBells;
   BellSound? _startingBell;
   BellSound? _endingBell;
   String? _errorText;
   bool _isNormalizingDurationFields = false;
+  bool _isNormalizingPreparationFields = false;
   bool _isEditingBells = false;
   int _nextBellId = 0;
 
@@ -52,6 +56,22 @@ class _TimerEditScreenState extends State<TimerEditScreen> {
     _secondsController = TextEditingController(
       text: (duration.inSeconds % 60).toString().padLeft(2, '0'),
     );
+    final preparationDuration = timer?.preparationDuration ?? Duration.zero;
+    _preparationHoursController = TextEditingController(
+      text: preparationDuration.inHours.toString(),
+    );
+    _preparationMinutesController = TextEditingController(
+      text: preparationDuration.inMinutes
+          .remainder(60)
+          .toString()
+          .padLeft(2, '0'),
+    );
+    _preparationSecondsController = TextEditingController(
+      text: preparationDuration.inSeconds
+          .remainder(60)
+          .toString()
+          .padLeft(2, '0'),
+    );
     _startingBell = timer?.startingBell ?? _woodKnock;
     _endingBell = timer?.endingBell ?? _bellVeryLong;
     _intermediateBells = [
@@ -70,6 +90,9 @@ class _TimerEditScreenState extends State<TimerEditScreen> {
     _hoursController.dispose();
     _minutesController.dispose();
     _secondsController.dispose();
+    _preparationHoursController.dispose();
+    _preparationMinutesController.dispose();
+    _preparationSecondsController.dispose();
     super.dispose();
   }
 
@@ -168,6 +191,7 @@ class _TimerEditScreenState extends State<TimerEditScreen> {
     final duration = _isInfinite
         ? null
         : _normalizeDurationFields(enforceMinimum: true);
+    final preparationDuration = _normalizePreparationFields();
 
     Navigator.of(context).pop(
       MeditationTimerPreset(
@@ -178,6 +202,7 @@ class _TimerEditScreenState extends State<TimerEditScreen> {
             ? 'Meditation'
             : _activityController.text.trim(),
         duration: duration,
+        preparationDuration: preparationDuration,
         startingBell: _startingBell,
         endingBell: _endingBell,
         intermediateBells: [for (final bell in _intermediateBells) bell.bell],
@@ -270,6 +295,49 @@ class _TimerEditScreenState extends State<TimerEditScreen> {
     return normalizedDuration;
   }
 
+  Duration _normalizePreparationFields() {
+    if (_isNormalizingPreparationFields) {
+      return _durationFromFields(
+        _preparationHoursController,
+        _preparationMinutesController,
+        _preparationSecondsController,
+      );
+    }
+
+    final hours = _nonNegativeFieldValue(_preparationHoursController);
+    final minutes = _nonNegativeFieldValue(_preparationMinutesController);
+    final seconds = _nonNegativeFieldValue(_preparationSecondsController);
+    final duration = Duration(hours: hours, minutes: minutes, seconds: seconds);
+    final normalizedDuration = duration.inHours > 999
+        ? const Duration(hours: 999)
+        : duration;
+
+    if (duration.inHours > 999 ||
+        _hasBlankDurationField(
+                  _preparationHoursController,
+                  _preparationMinutesController,
+                  _preparationSecondsController,
+                ) ==
+                false &&
+            (minutes >= 60 || seconds >= 60)) {
+      _updatePreparationFields(normalizedDuration);
+    }
+
+    return normalizedDuration;
+  }
+
+  Duration _durationFromFields(
+    TextEditingController hoursController,
+    TextEditingController minutesController,
+    TextEditingController secondsController,
+  ) {
+    return Duration(
+      hours: _nonNegativeFieldValue(hoursController),
+      minutes: _nonNegativeFieldValue(minutesController),
+      seconds: _nonNegativeFieldValue(secondsController),
+    );
+  }
+
   int _nonNegativeFieldValue(TextEditingController controller) {
     final value = int.tryParse(controller.text.trim()) ?? 0;
     return value < 0 ? 0 : value;
@@ -297,6 +365,23 @@ class _TimerEditScreenState extends State<TimerEditScreen> {
       duration.inSeconds.remainder(60).toString().padLeft(2, '0'),
     );
     _isNormalizingDurationFields = false;
+  }
+
+  void _updatePreparationFields(Duration duration) {
+    _isNormalizingPreparationFields = true;
+    _setDurationFieldText(
+      _preparationHoursController,
+      duration.inHours.toString(),
+    );
+    _setDurationFieldText(
+      _preparationMinutesController,
+      duration.inMinutes.remainder(60).toString().padLeft(2, '0'),
+    );
+    _setDurationFieldText(
+      _preparationSecondsController,
+      duration.inSeconds.remainder(60).toString().padLeft(2, '0'),
+    );
+    _isNormalizingPreparationFields = false;
   }
 
   void _setDurationFieldText(TextEditingController controller, String text) {
@@ -359,6 +444,18 @@ class _TimerEditScreenState extends State<TimerEditScreen> {
                             _errorText = null;
                           });
                         },
+                      ),
+                      const SizedBox(height: 24),
+                      _DurationEditor(
+                        title: 'Preparation time',
+                        fieldKeyPrefix: 'preparation',
+                        isInfinite: false,
+                        showInfiniteToggle: false,
+                        hoursController: _preparationHoursController,
+                        minutesController: _preparationMinutesController,
+                        secondsController: _preparationSecondsController,
+                        onDurationChanged: _normalizePreparationFields,
+                        onInfiniteChanged: (_) {},
                       ),
                       const SizedBox(height: 24),
                       _BellEditor(
@@ -589,6 +686,7 @@ class _DurationEditor extends StatelessWidget {
     required this.onDurationChanged,
     required this.onInfiniteChanged,
     this.title = 'Duration',
+    this.fieldKeyPrefix = 'duration',
     this.showInfiniteToggle = true,
     this.wrapInPanel = true,
   });
@@ -600,6 +698,7 @@ class _DurationEditor extends StatelessWidget {
   final VoidCallback onDurationChanged;
   final ValueChanged<bool> onInfiniteChanged;
   final String title;
+  final String fieldKeyPrefix;
   final bool showInfiniteToggle;
   final bool wrapInPanel;
 
@@ -622,7 +721,7 @@ class _DurationEditor extends StatelessWidget {
           children: [
             Expanded(
               child: _DurationNumberField(
-                key: const ValueKey('duration-hours-field'),
+                key: ValueKey('$fieldKeyPrefix-hours-field'),
                 label: 'Hours',
                 controller: hoursController,
                 enabled: !isInfinite,
@@ -632,7 +731,7 @@ class _DurationEditor extends StatelessWidget {
             const SizedBox(width: 10),
             Expanded(
               child: _DurationNumberField(
-                key: const ValueKey('duration-minutes-field'),
+                key: ValueKey('$fieldKeyPrefix-minutes-field'),
                 label: 'Minutes',
                 controller: minutesController,
                 enabled: !isInfinite,
@@ -642,7 +741,7 @@ class _DurationEditor extends StatelessWidget {
             const SizedBox(width: 10),
             Expanded(
               child: _DurationNumberField(
-                key: const ValueKey('duration-seconds-field'),
+                key: ValueKey('$fieldKeyPrefix-seconds-field'),
                 label: 'Seconds',
                 controller: secondsController,
                 enabled: !isInfinite,
@@ -654,7 +753,7 @@ class _DurationEditor extends StatelessWidget {
         if (showInfiniteToggle) ...[
           const SizedBox(height: 12),
           CheckboxListTile(
-            key: const ValueKey('duration-infinite-checkbox'),
+            key: ValueKey('$fieldKeyPrefix-infinite-checkbox'),
             value: isInfinite,
             onChanged: (value) => onInfiniteChanged(value ?? false),
             contentPadding: EdgeInsets.zero,

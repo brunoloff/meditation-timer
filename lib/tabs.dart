@@ -701,6 +701,7 @@ Map<String, Object?> _encodeTimer(MeditationTimerPreset timer) {
     'note': timer.note,
     'activity': timer.activity,
     'durationSeconds': timer.duration?.inSeconds,
+    'preparationSeconds': timer.preparationDuration.inSeconds,
     'startingBell': timer.startingBell?.assetPath,
     'endingBell': timer.endingBell?.assetPath,
     'intermediateBells': [
@@ -805,6 +806,7 @@ MeditationTimerPreset? _decodeTimer(Object? encodedTimer) {
   final name = encodedTimer['name'];
   final id = encodedTimer['id'];
   final durationSeconds = encodedTimer['durationSeconds'];
+  final preparationSeconds = encodedTimer['preparationSeconds'];
   final startingBellAssetPath = encodedTimer['startingBell'];
   final endingBellAssetPath = encodedTimer['endingBell'];
   final note = encodedTimer['note'];
@@ -821,6 +823,11 @@ MeditationTimerPreset? _decodeTimer(Object? encodedTimer) {
 
   if (durationSeconds != null &&
       (durationSeconds is! int || durationSeconds < 0)) {
+    return null;
+  }
+
+  if (preparationSeconds != null &&
+      (preparationSeconds is! int || preparationSeconds < 0)) {
     return null;
   }
 
@@ -845,6 +852,7 @@ MeditationTimerPreset? _decodeTimer(Object? encodedTimer) {
   }
 
   final decodedDurationSeconds = durationSeconds as int?;
+  final decodedPreparationSeconds = preparationSeconds as int?;
   final decodedStartingBellAssetPath = startingBellAssetPath as String?;
   final decodedEndingBellAssetPath = endingBellAssetPath as String?;
   final decodedActivity = activity as String?;
@@ -871,6 +879,7 @@ MeditationTimerPreset? _decodeTimer(Object? encodedTimer) {
     duration: decodedDurationSeconds == null
         ? null
         : Duration(seconds: decodedDurationSeconds),
+    preparationDuration: Duration(seconds: decodedPreparationSeconds ?? 0),
     startingBell: decodedStartingBellAssetPath == null
         ? null
         : _bellByAssetPath(decodedStartingBellAssetPath),

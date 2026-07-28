@@ -57,6 +57,7 @@ class MeditationTimerPreset {
     required this.endingBell,
     this.note = '',
     this.activity = 'Meditation',
+    this.preparationDuration = Duration.zero,
     this.intermediateBells = const [],
   });
 
@@ -67,6 +68,7 @@ class MeditationTimerPreset {
   final BellSound? endingBell;
   final String note;
   final String activity;
+  final Duration preparationDuration;
   final List<IntermediateBell> intermediateBells;
 
   bool get isInfinite => duration == null;
@@ -82,6 +84,7 @@ class MeditationTimerPreset {
     bool clearEndingBell = false,
     String? note,
     String? activity,
+    Duration? preparationDuration,
     List<IntermediateBell>? intermediateBells,
   }) {
     return MeditationTimerPreset(
@@ -94,6 +97,7 @@ class MeditationTimerPreset {
       endingBell: clearEndingBell ? null : endingBell ?? this.endingBell,
       note: note ?? this.note,
       activity: activity ?? this.activity,
+      preparationDuration: preparationDuration ?? this.preparationDuration,
       intermediateBells: intermediateBells ?? this.intermediateBells,
     );
   }

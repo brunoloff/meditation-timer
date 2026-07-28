@@ -8,6 +8,7 @@
         "note": "",
         "activity": "Meditation",
         "durationSeconds": 1200,
+        "preparationSeconds": 0,
         "startingBell": "audio/bells/bell-very-long.mp3",
         "endingBell": "audio/bells/bowl-low-and-long.mp3",
         "intermediateBells": []
@@ -21,6 +22,7 @@
         "note": "Bells every 5m",
         "activity": "Meditation",
         "durationSeconds": null,
+        "preparationSeconds": 0,
         "startingBell": "audio/bells/bell-very-long.mp3",
         "endingBell": "audio/bells/bowl-low-and-long.mp3",
         "intermediateBells": [
@@ -52,6 +54,7 @@
           "note": "",
           "activity": "Meditation",
           "durationSeconds": 3600,
+          "preparationSeconds": 0,
           "startingBell": "audio/bells/bell-very-long.mp3",
           "endingBell": "audio/bells/bowl-low-and-long.mp3",
           "intermediateBells": []
