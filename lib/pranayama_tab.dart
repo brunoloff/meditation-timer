@@ -10,6 +10,10 @@ class _PranayamaTab extends StatelessWidget {
     required this.activePreset,
     required this.elapsed,
     required this.isPaused,
+    required this.manualSegmentIndex,
+    required this.pendingPreset,
+    required this.pendingSegmentIndex,
+    required this.remoteControlActive,
     required this.onToggleRecentPresets,
     required this.onAddPreset,
     required this.onAddFolder,
@@ -33,6 +37,10 @@ class _PranayamaTab extends StatelessWidget {
   final PranayamaPreset? activePreset;
   final Duration elapsed;
   final bool isPaused;
+  final int? manualSegmentIndex;
+  final PranayamaPreset? pendingPreset;
+  final int? pendingSegmentIndex;
+  final bool remoteControlActive;
   final VoidCallback onToggleRecentPresets;
   final VoidCallback onAddPreset;
   final VoidCallback onAddFolder;
@@ -57,6 +65,10 @@ class _PranayamaTab extends StatelessWidget {
           preset: activePreset,
           elapsed: elapsed,
           isPaused: isPaused,
+          manualSegmentIndex: manualSegmentIndex,
+          pendingPreset: pendingPreset,
+          pendingSegmentIndex: pendingSegmentIndex,
+          remoteControlActive: remoteControlActive,
           onTogglePause: onTogglePause,
           onStop: onStop,
         ),
@@ -146,6 +158,10 @@ class _PranayamaGuidePanel extends StatelessWidget {
     required this.preset,
     required this.elapsed,
     required this.isPaused,
+    required this.manualSegmentIndex,
+    required this.pendingPreset,
+    required this.pendingSegmentIndex,
+    required this.remoteControlActive,
     required this.onTogglePause,
     required this.onStop,
   });
@@ -153,11 +169,16 @@ class _PranayamaGuidePanel extends StatelessWidget {
   final PranayamaPreset? preset;
   final Duration elapsed;
   final bool isPaused;
+  final int? manualSegmentIndex;
+  final PranayamaPreset? pendingPreset;
+  final int? pendingSegmentIndex;
+  final bool remoteControlActive;
   final VoidCallback onTogglePause;
   final VoidCallback onStop;
 
   @override
   Widget build(BuildContext context) {
+    final forcedSegmentIndex = remoteControlActive ? manualSegmentIndex : null;
     final phase = preset == null
         ? const _PranayamaPhaseSnapshot(
             label: 'Ready',
@@ -165,10 +186,22 @@ class _PranayamaGuidePanel extends StatelessWidget {
             breathCount: 0,
             cycleProgress: 0,
           )
-        : _phaseSnapshotForPranayama(preset!, elapsed);
+        : _phaseSnapshotForPranayama(
+            preset!,
+            elapsed,
+            forcedSegmentIndex: forcedSegmentIndex,
+          );
     final activeSegment = preset == null
         ? null
-        : _pranayamaSegmentAtElapsed(preset!, elapsed).segment;
+        : _pranayamaSegmentAtElapsed(
+            preset!,
+            elapsed,
+            forcedSegmentIndex: forcedSegmentIndex,
+          ).segment;
+    final pendingSegment = _pranayamaPendingSegment(
+      pendingPreset,
+      pendingSegmentIndex,
+    );
     final activeCycleDuration = activeSegment?.cycleDuration ?? Duration.zero;
     final bpm = preset == null || activeCycleDuration == Duration.zero
         ? 0.0
@@ -191,6 +224,7 @@ class _PranayamaGuidePanel extends StatelessWidget {
                       preset: preset,
                       elapsed: elapsed,
                       isActive: preset != null,
+                      forcedSegmentIndex: forcedSegmentIndex,
                     ),
                   ),
                 ),
@@ -262,7 +296,10 @@ class _PranayamaGuidePanel extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 if (activeSegment != null)
-                  _PranayamaTimingTable(segment: activeSegment),
+                  _PranayamaTimingTable(
+                    segment: activeSegment,
+                    pendingSegment: pendingSegment,
+                  ),
                 if (preset != null) const SizedBox(height: 14),
                 Row(
                   children: [
@@ -299,9 +336,13 @@ class _PranayamaGuidePanel extends StatelessWidget {
 }
 
 class _PranayamaTimingTable extends StatelessWidget {
-  const _PranayamaTimingTable({required this.segment});
+  const _PranayamaTimingTable({
+    required this.segment,
+    required this.pendingSegment,
+  });
 
   final PranayamaSegment segment;
+  final PranayamaSegment? pendingSegment;
 
   @override
   Widget build(BuildContext context) {
@@ -318,10 +359,30 @@ class _PranayamaTimingTable extends StatelessWidget {
         const SizedBox(height: 8),
         Row(
           children: [
-            Expanded(child: _TimingValue(segment.inBreath)),
-            Expanded(child: _TimingValue(segment.firstHold)),
-            Expanded(child: _TimingValue(segment.outBreath)),
-            Expanded(child: _TimingValue(segment.secondHold)),
+            Expanded(
+              child: _TimingValue(
+                segment.inBreath,
+                pendingDuration: pendingSegment?.inBreath,
+              ),
+            ),
+            Expanded(
+              child: _TimingValue(
+                segment.firstHold,
+                pendingDuration: pendingSegment?.firstHold,
+              ),
+            ),
+            Expanded(
+              child: _TimingValue(
+                segment.outBreath,
+                pendingDuration: pendingSegment?.outBreath,
+              ),
+            ),
+            Expanded(
+              child: _TimingValue(
+                segment.secondHold,
+                pendingDuration: pendingSegment?.secondHold,
+              ),
+            ),
           ],
         ),
       ],
@@ -350,21 +411,146 @@ class _TimingHeader extends StatelessWidget {
 }
 
 class _TimingValue extends StatelessWidget {
-  const _TimingValue(this.duration);
+  const _TimingValue(this.duration, {this.pendingDuration});
 
   final Duration duration;
+  final Duration? pendingDuration;
 
   @override
   Widget build(BuildContext context) {
-    return Text(
-      '${(duration.inMilliseconds / 1000).toStringAsFixed(1)}s',
-      textAlign: TextAlign.center,
+    final nextDuration = pendingDuration;
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          _formatPranayamaSeconds(duration),
+          textAlign: TextAlign.center,
+          style: const TextStyle(
+            color: Colors.white,
+            fontSize: 18,
+            fontWeight: FontWeight.w600,
+            fontFeatures: [FontFeature.tabularFigures()],
+            letterSpacing: 0,
+          ),
+        ),
+        if (nextDuration != null) ...[
+          const SizedBox(width: 6),
+          Text(
+            _formatPranayamaSeconds(nextDuration),
+            key: ValueKey(
+              'pending-pranayama-value-${duration.inMilliseconds}-${nextDuration.inMilliseconds}',
+            ),
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              color: Color(0xFFE26E6E),
+              fontSize: 14,
+              fontWeight: FontWeight.w700,
+              fontFeatures: [FontFeature.tabularFigures()],
+              letterSpacing: 0,
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+PranayamaSegment? _pranayamaPendingSegment(
+  PranayamaPreset? preset,
+  int? segmentIndex,
+) {
+  if (preset == null || preset.segments.isEmpty) {
+    return null;
+  }
+
+  final index = (segmentIndex ?? 0)
+      .clamp(0, preset.segments.length - 1)
+      .toInt();
+  return preset.segments[index];
+}
+
+String _formatPranayamaSeconds(Duration duration) {
+  return '${(duration.inMilliseconds / 1000).toStringAsFixed(1)}s';
+}
+
+class _CompactPranayamaTimingTable extends StatelessWidget {
+  const _CompactPranayamaTimingTable({
+    required this.segment,
+    required this.pendingSegment,
+  });
+
+  final PranayamaSegment segment;
+  final PranayamaSegment? pendingSegment;
+
+  @override
+  Widget build(BuildContext context) {
+    return DefaultTextStyle(
       style: const TextStyle(
-        color: Colors.white,
-        fontSize: 18,
-        fontWeight: FontWeight.w600,
+        color: Color(0xFFBDBDC2),
+        fontSize: 10,
+        fontWeight: FontWeight.w700,
+        fontFeatures: [FontFeature.tabularFigures()],
         letterSpacing: 0,
       ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _CompactTimingValue(
+            label: 'IN',
+            duration: segment.inBreath,
+            pendingDuration: pendingSegment?.inBreath,
+          ),
+          const SizedBox(width: 8),
+          _CompactTimingValue(
+            label: 'H',
+            duration: segment.firstHold,
+            pendingDuration: pendingSegment?.firstHold,
+          ),
+          const SizedBox(width: 8),
+          _CompactTimingValue(
+            label: 'OUT',
+            duration: segment.outBreath,
+            pendingDuration: pendingSegment?.outBreath,
+          ),
+          const SizedBox(width: 8),
+          _CompactTimingValue(
+            label: 'H',
+            duration: segment.secondHold,
+            pendingDuration: pendingSegment?.secondHold,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _CompactTimingValue extends StatelessWidget {
+  const _CompactTimingValue({
+    required this.label,
+    required this.duration,
+    required this.pendingDuration,
+  });
+
+  final String label;
+  final Duration duration;
+  final Duration? pendingDuration;
+
+  @override
+  Widget build(BuildContext context) {
+    final nextDuration = pendingDuration;
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text('$label ${_formatPranayamaSeconds(duration)}'),
+        if (nextDuration != null) ...[
+          const SizedBox(width: 3),
+          Text(
+            _formatPranayamaSeconds(nextDuration),
+            style: const TextStyle(color: Color(0xFFE26E6E)),
+          ),
+        ],
+      ],
     );
   }
 }
@@ -374,11 +560,13 @@ class _PranayamaWavePainter extends CustomPainter {
     required this.preset,
     required this.elapsed,
     required this.isActive,
+    required this.forcedSegmentIndex,
   });
 
   final PranayamaPreset? preset;
   final Duration elapsed;
   final bool isActive;
+  final int? forcedSegmentIndex;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -399,6 +587,7 @@ class _PranayamaWavePainter extends CustomPainter {
       preset,
       elapsed: elapsed,
       size: size,
+      forcedSegmentIndex: forcedSegmentIndex,
     );
 
     final path = Path()
@@ -452,7 +641,8 @@ class _PranayamaWavePainter extends CustomPainter {
   bool shouldRepaint(covariant _PranayamaWavePainter oldDelegate) {
     return oldDelegate.preset != preset ||
         oldDelegate.elapsed != elapsed ||
-        oldDelegate.isActive != isActive;
+        oldDelegate.isActive != isActive ||
+        oldDelegate.forcedSegmentIndex != forcedSegmentIndex;
   }
 }
 
@@ -483,10 +673,15 @@ class _PranayamaPathGuide {
     PranayamaPreset? preset, {
     required Duration elapsed,
     required Size size,
+    int? forcedSegmentIndex,
   }) {
     final segmentPosition = preset == null
         ? null
-        : _pranayamaSegmentAtElapsed(preset, elapsed);
+        : _pranayamaSegmentAtElapsed(
+            preset,
+            elapsed,
+            forcedSegmentIndex: forcedSegmentIndex,
+          );
     final localElapsed = segmentPosition?.localElapsed ?? elapsed;
     final segment = segmentPosition?.segment;
     final inBreath = segment?.inBreath ?? const Duration(seconds: 5);
@@ -548,7 +743,9 @@ class _PranayamaPathGuide {
         : _transitionDotsForElapsed(
             elapsedInCycle: elapsedInCycle,
             elapsed: localElapsed,
-            effectiveDuration: _effectivePranayamaSegmentDuration(segment!),
+            effectiveDuration: forcedSegmentIndex == null
+                ? _effectivePranayamaSegmentDuration(segment!)
+                : null,
             totalMilliseconds: totalMilliseconds,
             leadDurationMilliseconds: _pranayamaLeadDuration.inMilliseconds,
             leadingStart: leadingStart,
@@ -2207,6 +2404,23 @@ PranayamaPreset? _pranayamaPresetByIdInEntries(
   return null;
 }
 
+PranayamaPreset? _firstPranayamaPresetInEntries(
+  List<PranayamaBrowserEntry> entries,
+) {
+  for (final entry in entries) {
+    switch (entry) {
+      case PranayamaPresetEntry(:final preset):
+        return preset;
+      case PranayamaFolderEntry(:final folder):
+        if (folder.presets.isNotEmpty) {
+          return folder.presets.first;
+        }
+    }
+  }
+
+  return null;
+}
+
 class _PranayamaPhaseSnapshot {
   const _PranayamaPhaseSnapshot({
     required this.label,
@@ -2223,9 +2437,14 @@ class _PranayamaPhaseSnapshot {
 
 _PranayamaPhaseSnapshot _phaseSnapshotForPranayama(
   PranayamaPreset preset,
-  Duration elapsed,
-) {
-  final segmentPosition = _pranayamaSegmentAtElapsed(preset, elapsed);
+  Duration elapsed, {
+  int? forcedSegmentIndex,
+}) {
+  final segmentPosition = _pranayamaSegmentAtElapsed(
+    preset,
+    elapsed,
+    forcedSegmentIndex: forcedSegmentIndex,
+  );
   final segment = segmentPosition.segment;
   final localElapsed = segmentPosition.localElapsed;
   final cycleMilliseconds = segment.cycleDuration.inMilliseconds;

@@ -238,6 +238,8 @@ Default pranayama presets include:
   - `5/6 HRV Breathing`, 15 minutes.
   - `6/7 HRV Breathing`, 15 minutes.
   - `4/5/6 BPV Breathing`, 15 minutes.
+  - `HRV & HPV Breathing`, two segments: 12 minutes of `5-0-7-0`, then
+    5 minutes of `5-6-7-0`.
 
 The pranayama guide graph:
 

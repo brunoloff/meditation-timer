@@ -1,5 +1,7 @@
 part of 'main.dart';
 
+const _externalTouchRemoteCommandDebounce = Duration(milliseconds: 500);
+
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key, this.openBackgroundSetupGuide, this.now});
 
@@ -11,6 +13,10 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
+  static const MethodChannel _remoteKeysChannel = MethodChannel(
+    'bruno_meditation_timer/remote_keys',
+  );
+
   // Home owns all tab-level state that must survive pushing full-screen routes
   // such as meditation sessions and edit screens. Keeping pranayama state here
   // is deliberate: pranayama audio can continue while the user runs a timer.
@@ -22,14 +28,26 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _isEditingTimerPositions = false;
   bool _isEditingPranayamaPositions = false;
   int _recentTimerLimit = _defaultRecentTimerLimit;
-  AudioPlayer? _settingsAudioPlayer;
-  AudioPlayer? _detachedEndingBellPlayer;
-  AudioPlayer? _pranayamaAudioPlayer;
-  Future<void>? _pranayamaAudioPlayback;
-  String? _pranayamaAudioPresetKey;
+  final _BellAudioEngine _bellAudioEngine = _BellAudioEngine.instance;
+  final _PranayamaAudioEngine _pranayamaAudioEngine = _PranayamaAudioEngine();
   final Map<String, _PranayamaToneClip> _pranayamaToneCache =
       <String, _PranayamaToneClip>{};
-  bool _isPranayamaAudioContextConfigured = false;
+  final List<_ScheduledPranayamaCycle> _scheduledPranayamaAudioCycles =
+      <_ScheduledPranayamaCycle>[];
+  Future<void>? _pranayamaAudioOperation;
+  bool _pranayamaRemoteControlEnabled = false;
+  final Map<PranayamaRemoteCommand, PranayamaRemoteInputBinding>
+  _pranayamaRemoteCommandBindings =
+      <PranayamaRemoteCommand, PranayamaRemoteInputBinding>{};
+  PranayamaRemoteCommand? _capturingPranayamaRemoteCommand;
+  final ValueNotifier<List<_PranayamaRemoteInputDebugEvent>>
+  _pranayamaRemoteInputEvents =
+      ValueNotifier<List<_PranayamaRemoteInputDebugEvent>>(
+        const <_PranayamaRemoteInputDebugEvent>[],
+      );
+  int _pranayamaRemoteInputSerial = 0;
+  String? _lastHandledAndroidRemoteEventSignature;
+  Timer? _pendingExternalTouchRemoteCommandTimer;
   // Async audio startup can complete after the user pauses/stops/switches a
   // preset. These generations make those stale completions harmless.
   int _pranayamaStartGeneration = 0;
@@ -54,6 +72,9 @@ class _HomeScreenState extends State<HomeScreen> {
   DateTime? _pranayamaStartedAt;
   Duration _pranayamaElapsedBeforePause = Duration.zero;
   bool _isPranayamaPaused = false;
+  int _activePranayamaSegmentIndex = 0;
+  _PendingPranayamaTransition? _pendingPranayamaTransition;
+  Timer? _pendingPranayamaTransitionTimer;
   Timer? _pranayamaTicker;
   final ValueNotifier<PranayamaSessionSnapshot> _pranayamaSessionNotifier =
       ValueNotifier<PranayamaSessionSnapshot>(PranayamaSessionSnapshot.empty);
@@ -65,16 +86,21 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
+    _remoteKeysChannel.setMethodCallHandler(_handleRemoteKeyMethodCall);
+    HardwareKeyboard.instance.addHandler(_handlePranayamaRemoteKeyEvent);
     _loadHomeSettings();
   }
 
   @override
   void dispose() {
+    _remoteKeysChannel.setMethodCallHandler(null);
+    HardwareKeyboard.instance.removeHandler(_handlePranayamaRemoteKeyEvent);
+    _pendingExternalTouchRemoteCommandTimer?.cancel();
+    _pendingPranayamaTransitionTimer?.cancel();
     _pranayamaTicker?.cancel();
-    _disposePranayamaAudioPlayers();
-    _settingsAudioPlayer?.dispose();
-    _detachedEndingBellPlayer?.dispose();
+    _disposePranayamaAudioEngine();
     _pranayamaSessionNotifier.dispose();
+    _pranayamaRemoteInputEvents.dispose();
     super.dispose();
   }
 
@@ -93,6 +119,15 @@ class _HomeScreenState extends State<HomeScreen> {
       _soundEnabled = preferences.getBool(_soundEnabledKey) ?? true;
       _turnScreenOnNearAudio =
           preferences.getBool(_turnScreenOnNearAudioKey) ?? true;
+      _pranayamaRemoteControlEnabled =
+          preferences.getBool(_pranayamaRemoteControlEnabledKey) ?? false;
+      _pranayamaRemoteCommandBindings
+        ..clear()
+        ..addAll(
+          _decodePranayamaRemoteCommandKeys(
+            preferences.getString(_pranayamaRemoteCommandKeysKey),
+          ),
+        );
       _recentTimerLimit = _clampRecentTimerLimit(
         preferences.getInt(_recentTimerLimitKey) ?? _defaultRecentTimerLimit,
       );
@@ -123,6 +158,7 @@ class _HomeScreenState extends State<HomeScreen> {
               _defaultPranayamaEntries,
         );
     });
+    unawaited(_setAndroidRemoteKeyListening(_pranayamaRemoteControlEnabled));
   }
 
   void _selectTab(HomeTab tab) {
@@ -152,14 +188,25 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _setSoundEnabled({required bool enabled}) async {
+    final preservePranayamaElapsed =
+        _activePranayamaPreset != null && !_isPranayamaPaused;
+    final pranayamaElapsed = preservePranayamaElapsed
+        ? _currentPranayamaElapsed
+        : Duration.zero;
+
     setState(() {
       _soundEnabled = enabled;
+      if (!enabled && preservePranayamaElapsed) {
+        _pranayamaElapsedBeforePause = pranayamaElapsed;
+        _pranayamaStartedAt = DateTime.now();
+      }
     });
     if (!enabled) {
       unawaited(_mutePranayamaAudio());
     } else {
-      unawaited(_syncPranayamaAudio());
+      unawaited(_syncPranayamaAudio(forceRestart: true));
     }
+    _notifyPranayamaSession();
 
     final preferences = await SharedPreferences.getInstance();
     await preferences.setBool(_soundEnabledKey, enabled);
@@ -172,6 +219,387 @@ class _HomeScreenState extends State<HomeScreen> {
 
     final preferences = await SharedPreferences.getInstance();
     await preferences.setBool(_turnScreenOnNearAudioKey, enabled);
+  }
+
+  Future<void> _setPranayamaRemoteControlEnabled({
+    required bool enabled,
+  }) async {
+    if (_pranayamaRemoteControlEnabled == enabled) {
+      return;
+    }
+
+    final preset = _activePranayamaPreset;
+    _clearPendingPranayamaTransition();
+    setState(() {
+      if (preset != null) {
+        final elapsed = _currentPranayamaElapsed;
+        if (enabled) {
+          final position = _pranayamaSegmentAtElapsed(preset, elapsed);
+          _activePranayamaSegmentIndex = position.index;
+          _pranayamaElapsedBeforePause = position.localElapsed;
+        } else {
+          final position = _pranayamaSegmentAtElapsed(
+            preset,
+            elapsed,
+            forcedSegmentIndex: _activePranayamaSegmentIndex,
+          );
+          _pranayamaElapsedBeforePause =
+              _pranayamaSegmentStartForIndex(preset, position.index) +
+              position.localElapsed;
+        }
+        _pranayamaStartedAt = _isPranayamaPaused ? null : DateTime.now();
+      }
+
+      _pranayamaRemoteControlEnabled = enabled;
+    });
+    _notifyPranayamaSession();
+    if (preset != null && !_isPranayamaPaused) {
+      unawaited(_syncPranayamaAudio(forceRestart: true));
+    }
+
+    final preferences = await SharedPreferences.getInstance();
+    await preferences.setBool(_pranayamaRemoteControlEnabledKey, enabled);
+    unawaited(_setAndroidRemoteKeyListening(enabled));
+  }
+
+  Future<void> _setAndroidRemoteKeyListening(bool enabled) async {
+    if (defaultTargetPlatform != TargetPlatform.android) {
+      return;
+    }
+
+    try {
+      await _remoteKeysChannel.invokeMethod<void>(
+        'setRemoteKeyListeningEnabled',
+        {'enabled': enabled},
+      );
+    } on MissingPluginException {
+      // Non-Android builds and older installed builds simply do not expose the
+      // native remote bridge.
+    } on PlatformException catch (error) {
+      debugPrint('Could not update Android remote key listening: $error');
+    }
+  }
+
+  Future<void> _openRemoteAccessibilitySettings() async {
+    if (defaultTargetPlatform != TargetPlatform.android) {
+      _showMessage('Accessibility settings are only available on Android.');
+      return;
+    }
+
+    try {
+      await _remoteKeysChannel.invokeMethod<void>('openAccessibilitySettings');
+    } on MissingPluginException {
+      _showMessage('Could not open Android accessibility settings.');
+    } on PlatformException catch (error) {
+      debugPrint('Could not open Android accessibility settings: $error');
+      _showMessage('Could not open Android accessibility settings.');
+    }
+  }
+
+  Future<void> _handleRemoteKeyMethodCall(MethodCall call) async {
+    if (call.method != 'androidKeyEvent' &&
+        call.method != 'androidMotionEvent') {
+      return;
+    }
+
+    final event = _PranayamaRemoteInputDebugEvent.fromAndroidPayload(
+      serial: ++_pranayamaRemoteInputSerial,
+      method: call.method,
+      payload: call.arguments,
+    );
+    if (event == null) {
+      return;
+    }
+
+    _recordPranayamaRemoteInputEvent(event);
+    if (!_pranayamaRemoteControlEnabled ||
+        _capturingPranayamaRemoteCommand != null ||
+        !event.isCommandTrigger ||
+        event.repeatCount > 0 ||
+        _isTextInputFocused()) {
+      return;
+    }
+
+    final binding = event.binding;
+    if (binding == null) {
+      return;
+    }
+
+    final command = _pranayamaRemoteCommandForBinding(binding);
+    if (command == null) {
+      return;
+    }
+
+    final signature = event.androidCommandSignature;
+    if (signature != null &&
+        signature == _lastHandledAndroidRemoteEventSignature) {
+      return;
+    }
+    _lastHandledAndroidRemoteEventSignature = signature;
+    _runOrSchedulePranayamaRemoteCommand(command, event: event);
+  }
+
+  void _recordPranayamaRemoteInputEvent(_PranayamaRemoteInputDebugEvent event) {
+    _pranayamaRemoteInputEvents.value = [
+      event,
+      ..._pranayamaRemoteInputEvents.value.take(23),
+    ];
+  }
+
+  Future<void> _capturePranayamaRemoteCommandKey(
+    PranayamaRemoteCommand command,
+  ) async {
+    setState(() {
+      _capturingPranayamaRemoteCommand = command;
+    });
+
+    try {
+      unawaited(_setAndroidRemoteKeyListening(true));
+      if (!mounted) {
+        return;
+      }
+
+      final initialLatestSerial = _pranayamaRemoteInputEvents.value.isEmpty
+          ? 0
+          : _pranayamaRemoteInputEvents.value.first.serial;
+      final binding = await showDialog<PranayamaRemoteInputBinding>(
+        context: context,
+        builder: (_) => _PranayamaRemoteKeyCaptureDialog(
+          command: command,
+          remoteInputEvents: _pranayamaRemoteInputEvents,
+          initialLatestSerial: initialLatestSerial,
+        ),
+      );
+      if (!mounted || binding == null) {
+        return;
+      }
+
+      setState(() {
+        _pranayamaRemoteCommandBindings.removeWhere(
+          (_, existingBinding) => existingBinding == binding,
+        );
+        _pranayamaRemoteCommandBindings[command] = binding;
+      });
+      await _savePranayamaRemoteCommandKeys();
+    } finally {
+      unawaited(_setAndroidRemoteKeyListening(_pranayamaRemoteControlEnabled));
+      if (mounted) {
+        setState(() {
+          _capturingPranayamaRemoteCommand = null;
+        });
+      }
+    }
+  }
+
+  Future<void> _clearPranayamaRemoteCommandKey(
+    PranayamaRemoteCommand command,
+  ) async {
+    setState(() {
+      _pranayamaRemoteCommandBindings.remove(command);
+    });
+    await _savePranayamaRemoteCommandKeys();
+  }
+
+  Future<void> _savePranayamaRemoteCommandKeys() async {
+    final preferences = await SharedPreferences.getInstance();
+    await preferences.setString(
+      _pranayamaRemoteCommandKeysKey,
+      jsonEncode(
+        _encodePranayamaRemoteCommandKeys(_pranayamaRemoteCommandBindings),
+      ),
+    );
+  }
+
+  bool _handlePranayamaRemoteKeyEvent(KeyEvent event) {
+    if (event is KeyDownEvent ||
+        event is KeyUpEvent ||
+        event is KeyRepeatEvent) {
+      _recordPranayamaRemoteInputEvent(
+        _PranayamaRemoteInputDebugEvent.fromFlutterKeyEvent(
+          serial: ++_pranayamaRemoteInputSerial,
+          event: event,
+        ),
+      );
+    }
+
+    if (!_pranayamaRemoteControlEnabled ||
+        _capturingPranayamaRemoteCommand != null ||
+        event is! KeyDownEvent ||
+        _isTextInputFocused()) {
+      return false;
+    }
+
+    final command = _pranayamaRemoteCommandForBinding(
+      PranayamaRemoteInputBinding.flutterLogicalKey(event.logicalKey.keyId),
+    );
+    if (command == null) {
+      return false;
+    }
+
+    _pendingExternalTouchRemoteCommandTimer?.cancel();
+    _pendingExternalTouchRemoteCommandTimer = null;
+    _runPranayamaRemoteCommand(command);
+    return true;
+  }
+
+  bool _isTextInputFocused() {
+    final focusContext = FocusManager.instance.primaryFocus?.context;
+    if (focusContext == null) {
+      return false;
+    }
+
+    return focusContext.widget is EditableText ||
+        focusContext.findAncestorWidgetOfExactType<EditableText>() != null;
+  }
+
+  PranayamaRemoteCommand? _pranayamaRemoteCommandForBinding(
+    PranayamaRemoteInputBinding binding,
+  ) {
+    for (final entry in _pranayamaRemoteCommandBindings.entries) {
+      if (entry.value == binding) {
+        return entry.key;
+      }
+    }
+    return null;
+  }
+
+  Future<void> _openPranayamaRemoteDiagnostics() async {
+    unawaited(_setAndroidRemoteKeyListening(true));
+    try {
+      if (!mounted) {
+        return;
+      }
+
+      await showDialog<void>(
+        context: context,
+        builder: (_) => _PranayamaRemoteDiagnosticsDialog(
+          remoteInputEvents: _pranayamaRemoteInputEvents,
+          onClear: () {
+            _pranayamaRemoteInputEvents.value =
+                const <_PranayamaRemoteInputDebugEvent>[];
+          },
+        ),
+      );
+    } finally {
+      unawaited(_setAndroidRemoteKeyListening(_pranayamaRemoteControlEnabled));
+    }
+  }
+
+  void _runOrSchedulePranayamaRemoteCommand(
+    PranayamaRemoteCommand command, {
+    required _PranayamaRemoteInputDebugEvent event,
+  }) {
+    if (event.origin != 'externalTouch') {
+      _pendingExternalTouchRemoteCommandTimer?.cancel();
+      _pendingExternalTouchRemoteCommandTimer = null;
+      _runPranayamaRemoteCommand(command);
+      return;
+    }
+
+    // The WX02-style ring emits its single-click gesture before its double-click
+    // gesture. Treat external-touch input as a short cluster and execute only
+    // the final gesture so double-click bindings do not also fire the
+    // single-click command.
+    _pendingExternalTouchRemoteCommandTimer?.cancel();
+    _pendingExternalTouchRemoteCommandTimer = Timer(
+      _externalTouchRemoteCommandDebounce,
+      () {
+        _pendingExternalTouchRemoteCommandTimer = null;
+        if (mounted && _pranayamaRemoteControlEnabled) {
+          _runPranayamaRemoteCommand(command);
+        }
+      },
+    );
+  }
+
+  void _runPranayamaRemoteCommand(PranayamaRemoteCommand command) {
+    switch (command) {
+      case PranayamaRemoteCommand.toggleStartStop:
+        _togglePranayamaRemoteStartStop();
+      case PranayamaRemoteCommand.increaseBreathLengths:
+        _scaleActivePranayamaBreathLengths(1.1);
+      case PranayamaRemoteCommand.decreaseBreathLengths:
+        _scaleActivePranayamaBreathLengths(1 / 1.1);
+      case PranayamaRemoteCommand.nextSegment:
+        _moveActivePranayamaSegment(1);
+      case PranayamaRemoteCommand.previousSegment:
+        _moveActivePranayamaSegment(-1);
+    }
+  }
+
+  void _togglePranayamaRemoteStartStop() {
+    if (_activePranayamaPreset != null) {
+      _stopPranayamaSession();
+      return;
+    }
+
+    final preset =
+        (_recentPranayamaPresets.isEmpty ? null : _recentPranayamaPresets[0]) ??
+        _firstPranayamaPresetInEntries(_pranayamaEntries);
+    if (preset != null) {
+      _startPranayamaPreset(preset);
+    }
+  }
+
+  void _scaleActivePranayamaBreathLengths(double factor) {
+    final preset =
+        _pendingPranayamaTransition?.preset ?? _activePranayamaPreset;
+    if (preset == null) {
+      return;
+    }
+
+    final updatedPreset = preset.copyWith(
+      segments: [
+        for (final segment in preset.segments)
+          segment.copyWith(
+            inBreath: _scaledPranayamaPhaseDuration(segment.inBreath, factor),
+            firstHold: _scaledPranayamaPhaseDuration(segment.firstHold, factor),
+            outBreath: _scaledPranayamaPhaseDuration(segment.outBreath, factor),
+            secondHold: _scaledPranayamaPhaseDuration(
+              segment.secondHold,
+              factor,
+            ),
+          ),
+      ],
+    );
+
+    _queueOrApplyPranayamaTransition(
+      preset: updatedPreset,
+      segmentIndex:
+          _pendingPranayamaTransition?.segmentIndex ??
+          _activePranayamaSegmentIndex,
+    );
+  }
+
+  Duration _scaledPranayamaPhaseDuration(Duration duration, double factor) {
+    if (duration == Duration.zero) {
+      return Duration.zero;
+    }
+
+    final scaledMilliseconds = (duration.inMilliseconds * factor).round();
+    return Duration(milliseconds: math.max(100, scaledMilliseconds));
+  }
+
+  void _moveActivePranayamaSegment(int delta) {
+    final preset =
+        _pendingPranayamaTransition?.preset ?? _activePranayamaPreset;
+    if (preset == null || preset.segments.isEmpty) {
+      return;
+    }
+
+    final currentIndex =
+        (_pendingPranayamaTransition?.segmentIndex ??
+                _activePranayamaSegmentIndex)
+            .clamp(0, preset.segments.length - 1)
+            .toInt();
+    final nextIndex = (currentIndex + delta)
+        .clamp(0, preset.segments.length - 1)
+        .toInt();
+    if (nextIndex == currentIndex) {
+      return;
+    }
+
+    _queueOrApplyPranayamaTransition(preset: preset, segmentIndex: nextIndex);
   }
 
   Future<void> _setRecentTimerLimit(int limit) async {
@@ -206,8 +634,11 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
 
-    final audioPlayer = _settingsAudioPlayer ??= AudioPlayer();
-    await audioPlayer.play(AssetSource(_woodKnock.assetPath));
+    await _bellAudioEngine.play(
+      _woodKnock,
+      group: 'settings-test-sound',
+      replaceGroup: true,
+    );
   }
 
   Future<void> _importLogsCsv() async {
@@ -438,7 +869,6 @@ class _HomeScreenState extends State<HomeScreen> {
         _activePranayamaPreset =
             _pranayamaPresetByIdInEntries(activePreset.id, _pranayamaEntries) ??
             activePreset;
-        _pranayamaAudioPresetKey = null;
       }
     });
     _notifyPranayamaSession();
@@ -871,7 +1301,7 @@ class _HomeScreenState extends State<HomeScreen> {
   void _startTimer(MeditationTimerPreset timer) {
     // A new session is allowed to interrupt an ending bell that is still
     // ringing from the previous summary screen.
-    unawaited(_detachedEndingBellPlayer?.stop() ?? Future<void>.value());
+    unawaited(_bellAudioEngine.stopGroup('detached-ending-bell'));
     _recordRecentTimer(timer);
     setState(() {
       _activeMeditationTimer = timer;
@@ -938,14 +1368,11 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _playDetachedEndingBell(BellSound bell) async {
-    final player = _detachedEndingBellPlayer ??= AudioPlayer();
-    await _configurePlayerForAudioMixing(player);
-    try {
-      await player.stop();
-      await player.play(AssetSource(bell.assetPath));
-    } on Object {
-      return;
-    }
+    await _bellAudioEngine.play(
+      bell,
+      group: 'detached-ending-bell',
+      replaceGroup: true,
+    );
   }
 
   void _recordRecentTimer(MeditationTimerPreset timer) {
@@ -1311,7 +1738,157 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _startPranayamaPreset(PranayamaPreset preset) {
+    final activePreset = _activePranayamaPreset;
+    if (activePreset != null && !_isPranayamaPaused) {
+      _queueOrApplyPranayamaTransition(
+        preset: preset,
+        segmentIndex: 0,
+        recordRecentPreset: true,
+      );
+      return;
+    }
+
     unawaited(_beginPranayamaPreset(preset));
+  }
+
+  void _queueOrApplyPranayamaTransition({
+    required PranayamaPreset preset,
+    required int segmentIndex,
+    bool recordRecentPreset = false,
+  }) {
+    if (_activePranayamaPreset == null ||
+        _isPranayamaPaused ||
+        _pranayamaStartedAt == null) {
+      _applyPranayamaTransitionNow(
+        preset: preset,
+        segmentIndex: segmentIndex,
+        recordRecentPreset: recordRecentPreset,
+      );
+      return;
+    }
+
+    final currentElapsed = _currentPranayamaElapsed;
+    final currentEngineTime = _pranayamaAudioEngine.currentEngineTime;
+    final activeTimelineId = _pranayamaAudioTimelineId(
+      preset: _activePranayamaPreset!,
+      forcedSegmentIndex: _pranayamaRemoteControlEnabled
+          ? _activePranayamaSegmentIndex
+          : null,
+    );
+    final remainingUntilCycleEnd = _durationUntilCurrentPranayamaCycleEnds(
+      _activePranayamaPreset!,
+      elapsed: currentElapsed,
+    );
+    final applyAtElapsed = currentElapsed + remainingUntilCycleEnd;
+    final applyAtEngineTime = _pranayamaAudioEngine.engineTimeForElapsed(
+      applyAtElapsed,
+    );
+    _pendingPranayamaTransition = _PendingPranayamaTransition(
+      preset: preset,
+      segmentIndex: segmentIndex,
+      applyAtElapsed: applyAtElapsed,
+      applyAtEngineTime: applyAtEngineTime,
+      recordRecentPreset: recordRecentPreset,
+    );
+    setState(() {});
+    _notifyPranayamaSession();
+    _schedulePendingPranayamaTransitionTimer(remainingUntilCycleEnd);
+    _pranayamaAudioGeneration++;
+    unawaited(
+      _cancelScheduledPranayamaAudio(
+        keepCurrentTimelineId: activeTimelineId,
+        keepCurrentElapsed: currentElapsed,
+        keepCurrentEngineTime: currentEngineTime,
+        stopKeptAtEngineTime: applyAtEngineTime,
+      ).then((_) => _syncPranayamaAudio(forceQueue: true)),
+    );
+  }
+
+  void _schedulePendingPranayamaTransitionTimer(Duration remaining) {
+    _pendingPranayamaTransitionTimer?.cancel();
+    _pendingPranayamaTransitionTimer = Timer(remaining, () {
+      if (!mounted || _pendingPranayamaTransition == null) {
+        return;
+      }
+      _applyPendingPranayamaTransition();
+    });
+  }
+
+  Duration _durationUntilCurrentPranayamaCycleEnds(
+    PranayamaPreset preset, {
+    Duration? elapsed,
+  }) {
+    final position = _pranayamaSegmentAtElapsed(
+      preset,
+      elapsed ?? _currentPranayamaElapsed,
+      forcedSegmentIndex: _pranayamaRemoteControlEnabled
+          ? _activePranayamaSegmentIndex
+          : null,
+    );
+    final cycleDuration = _pranayamaCycleDurationForSegment(position.segment);
+    final cycleMilliseconds = math.max(1, cycleDuration.inMilliseconds);
+    final elapsedInCycle =
+        position.localElapsed.inMilliseconds % cycleMilliseconds;
+    final remainingMilliseconds = cycleMilliseconds - elapsedInCycle;
+    return Duration(milliseconds: remainingMilliseconds);
+  }
+
+  void _applyPendingPranayamaTransition({bool restartAudio = true}) {
+    final pendingTransition = _pendingPranayamaTransition;
+    if (pendingTransition == null || _activePranayamaPreset == null) {
+      return;
+    }
+
+    _pendingPranayamaTransition = null;
+    _pendingPranayamaTransitionTimer?.cancel();
+    _pendingPranayamaTransitionTimer = null;
+    _applyPranayamaTransitionNow(
+      preset: pendingTransition.preset,
+      segmentIndex: pendingTransition.segmentIndex,
+      recordRecentPreset: pendingTransition.recordRecentPreset,
+      restartAudio: restartAudio,
+      clockAnchorEngineTime:
+          pendingTransition.applyAtEngineTime ??
+          _pranayamaAudioEngine.engineTimeForElapsed(
+            pendingTransition.applyAtElapsed,
+          ),
+    );
+  }
+
+  void _applyPranayamaTransitionNow({
+    required PranayamaPreset preset,
+    required int segmentIndex,
+    bool recordRecentPreset = false,
+    bool restartAudio = true,
+    Duration? clockAnchorEngineTime,
+  }) {
+    _pranayamaStartGeneration++;
+    if (recordRecentPreset) {
+      _recordRecentPranayamaPreset(preset);
+    }
+
+    final nextSegmentIndex = preset.segments.isEmpty
+        ? 0
+        : segmentIndex.clamp(0, preset.segments.length - 1).toInt();
+    setState(() {
+      _activePranayamaPreset = preset;
+      _activePranayamaSegmentIndex = nextSegmentIndex;
+      _pranayamaElapsedBeforePause = Duration.zero;
+      _pranayamaStartedAt = _isPranayamaPaused ? null : DateTime.now();
+    });
+    if (clockAnchorEngineTime != null) {
+      _pranayamaAudioEngine.setClockAnchor(
+        elapsed: Duration.zero,
+        engineTime: clockAnchorEngineTime,
+      );
+    }
+    _cachePranayamaSegmentTones(preset);
+    _notifyPranayamaSession();
+    if (restartAudio && !_isPranayamaPaused) {
+      unawaited(
+        _syncPranayamaAudio(forceRestart: clockAnchorEngineTime == null),
+      );
+    }
   }
 
   void _notifyPranayamaSession() {
@@ -1319,26 +1896,31 @@ class _HomeScreenState extends State<HomeScreen> {
       preset: _activePranayamaPreset,
       elapsed: _currentPranayamaElapsed,
       isPaused: _isPranayamaPaused,
+      manualSegmentIndex: _pranayamaRemoteControlEnabled
+          ? _activePranayamaSegmentIndex
+          : null,
+      pendingPreset: _pendingPranayamaTransition?.preset,
+      pendingSegmentIndex: _pendingPranayamaTransition?.segmentIndex,
+      remoteControlActive:
+          _pranayamaRemoteControlEnabled && _activePranayamaPreset != null,
     );
   }
 
   Future<void> _beginPranayamaPreset(PranayamaPreset preset) async {
     final startGeneration = ++_pranayamaStartGeneration;
+    _clearPendingPranayamaTransition();
     _recordRecentPranayamaPreset(preset);
     setState(() {
       _activePranayamaPreset = preset;
       _pranayamaStartedAt = null;
       _pranayamaElapsedBeforePause = Duration.zero;
       _isPranayamaPaused = false;
-      _pranayamaAudioPresetKey = null;
+      _activePranayamaSegmentIndex = 0;
     });
     _notifyPranayamaSession();
     unawaited(_backgroundTimerService.start());
     _cachePranayamaSegmentTones(preset);
-    // Start the clock after audio is ready. On Linux and Android the first play
-    // call can take a beat to reach the backend, and starting the visual clock
-    // first makes the dot drift ahead of the tone.
-    await _warmUpPranayamaAudioIfNeeded();
+    await _startPranayamaAudio();
 
     if (!mounted ||
         startGeneration != _pranayamaStartGeneration ||
@@ -1364,8 +1946,10 @@ class _HomeScreenState extends State<HomeScreen> {
       unawaited(_resumePranayamaPreset(preset));
     } else {
       _pranayamaStartGeneration++;
+      final elapsed = _currentPranayamaElapsed;
+      _clearPendingPranayamaTransition();
       setState(() {
-        _pranayamaElapsedBeforePause = _currentPranayamaElapsed;
+        _pranayamaElapsedBeforePause = elapsed;
         _pranayamaStartedAt = null;
         _isPranayamaPaused = true;
       });
@@ -1379,13 +1963,10 @@ class _HomeScreenState extends State<HomeScreen> {
     setState(() {
       _pranayamaStartedAt = null;
       _isPranayamaPaused = false;
-      _pranayamaAudioPresetKey = null;
     });
     _notifyPranayamaSession();
     _cachePranayamaSegmentTones(preset);
-    // Resume uses the same warmup path as a fresh start so audio and visuals
-    // use one shared reference point.
-    await _warmUpPranayamaAudioIfNeeded();
+    await _startPranayamaAudio();
 
     if (!mounted ||
         startGeneration != _pranayamaStartGeneration ||
@@ -1405,13 +1986,14 @@ class _HomeScreenState extends State<HomeScreen> {
     _pranayamaStartGeneration++;
     _pranayamaTicker?.cancel();
     _pranayamaTicker = null;
+    _clearPendingPranayamaTransition();
 
     void clearSession() {
       _activePranayamaPreset = null;
       _pranayamaStartedAt = null;
       _pranayamaElapsedBeforePause = Duration.zero;
       _isPranayamaPaused = false;
-      _pranayamaAudioPresetKey = null;
+      _activePranayamaSegmentIndex = 0;
     }
 
     unawaited(_stopPranayamaAudio());
@@ -1425,9 +2007,16 @@ class _HomeScreenState extends State<HomeScreen> {
     _notifyPranayamaSession();
   }
 
+  void _clearPendingPranayamaTransition() {
+    _pendingPranayamaTransitionTimer?.cancel();
+    _pendingPranayamaTransitionTimer = null;
+    _pendingPranayamaTransition = null;
+  }
+
   void _ensurePranayamaTicker() {
-    // 60-ish fps keeps the breathing dot smooth; elapsed time is still derived
-    // from DateTime, not tick count, so delayed frames do not accumulate drift.
+    // 60-ish fps keeps the breathing dot smooth. When SoLoud is active, elapsed
+    // time is read from the audio engine's clock; otherwise DateTime is the
+    // fallback for silent/test runs.
     _pranayamaTicker ??= Timer.periodic(const Duration(milliseconds: 16), (_) {
       if (!mounted) {
         return;
@@ -1439,7 +2028,14 @@ class _HomeScreenState extends State<HomeScreen> {
       }
 
       final elapsed = _currentPranayamaElapsed;
-      final effectiveDuration = _effectivePranayamaDuration(preset);
+      if (_pendingPranayamaTransition != null &&
+          elapsed >= _pendingPranayamaTransition!.applyAtElapsed) {
+        _applyPendingPranayamaTransition();
+        return;
+      }
+      final effectiveDuration = _pranayamaRemoteControlEnabled
+          ? null
+          : _effectivePranayamaDuration(preset);
       if (effectiveDuration != null && elapsed >= effectiveDuration) {
         _stopPranayamaSession();
         return;
@@ -1451,16 +2047,6 @@ class _HomeScreenState extends State<HomeScreen> {
     });
   }
 
-  Future<void> _warmUpPranayamaAudioIfNeeded() async {
-    final audioStarted = await _startPranayamaAudio();
-    if (audioStarted) {
-      // Small pragmatic buffer for first-play backend latency. This is short
-      // enough to be unnoticeable but long enough to fix the observed first-run
-      // audio/visual phase offset.
-      await Future<void>.delayed(const Duration(milliseconds: 90));
-    }
-  }
-
   Future<bool> _startPranayamaAudio() async {
     if (!_soundEnabled ||
         _activePranayamaPreset == null ||
@@ -1468,91 +2054,412 @@ class _HomeScreenState extends State<HomeScreen> {
       return false;
     }
 
-    _pranayamaAudioPlayer ??= AudioPlayer();
-    if (!_isPranayamaAudioContextConfigured) {
-      await _configurePlayerForAudioMixing(_pranayamaAudioPlayer!);
-      _isPranayamaAudioContextConfigured = true;
-    }
     await _syncPranayamaAudio(forceRestart: true);
-    return true;
+    return _pranayamaAudioEngine.hasClockAnchor;
   }
 
-  Future<void> _syncPranayamaAudio({bool forceRestart = false}) async {
+  Future<void> _syncPranayamaAudio({
+    bool forceRestart = false,
+    bool forceQueue = false,
+  }) async {
+    final activeOperation = _pranayamaAudioOperation;
+    if (activeOperation != null && !forceRestart && !forceQueue) {
+      return activeOperation;
+    }
+    if (forceRestart) {
+      _pranayamaAudioGeneration++;
+    }
+    final generation = _pranayamaAudioGeneration;
+    final previousOperation = _pranayamaAudioOperation ?? Future<void>.value();
+    late final Future<void> operation;
+    operation = previousOperation
+        .then((_) {
+          return _syncPranayamaAudioNow(
+            forceRestart: forceRestart,
+            generation: generation,
+          );
+        })
+        .whenComplete(() {
+          if (_pranayamaAudioOperation == operation) {
+            _pranayamaAudioOperation = null;
+          }
+        });
+    _pranayamaAudioOperation = operation;
+    return operation;
+  }
+
+  Future<void> _syncPranayamaAudioNow({
+    required bool forceRestart,
+    required int generation,
+  }) async {
     final preset = _activePranayamaPreset;
     if (!_soundEnabled || preset == null || _isPranayamaPaused) {
       await _mutePranayamaAudio();
       return;
     }
 
-    final segmentPosition = _pranayamaSegmentAtElapsed(
-      preset,
-      _currentPranayamaElapsed,
-    );
-    final segment = segmentPosition.segment;
-    final presetKey =
-        '${preset.id}:${segmentPosition.index}:${_pranayamaToneCacheKeyForSegment(segment)}';
-    if (!forceRestart && presetKey == _pranayamaAudioPresetKey) {
+    if (!await _pranayamaAudioEngine.ensureReady()) {
+      return;
+    }
+    if (generation != _pranayamaAudioGeneration ||
+        !_soundEnabled ||
+        _activePranayamaPreset == null ||
+        _isPranayamaPaused) {
       return;
     }
 
-    _pranayamaAudioPresetKey = presetKey;
-    final toneClip = _toneClipForPranayamaSegment(segment);
-    final audioPlayer = _pranayamaAudioPlayer ??= AudioPlayer();
-    // Generated audio is a long whole-cycle clip. Looping every single breath
-    // cycle caused small platform loop delays to accumulate until the tone
-    // lagged behind the wall-clock visual guide.
-    final clipDurationMilliseconds = math.max(
-      1,
-      toneClip.duration.inMilliseconds,
-    );
-    final seekPosition = Duration(
-      milliseconds:
-          segmentPosition.localElapsed.inMilliseconds %
-          clipDurationMilliseconds,
-    );
-    final audioGeneration = ++_pranayamaAudioGeneration;
-    // Serialize stop/play/seek calls. Some platform players dislike overlapping
-    // commands, and overlap was the source of earlier clipped tone starts.
-    _pranayamaAudioPlayback = (_pranayamaAudioPlayback ?? Future.value()).then((
-      _,
-    ) async {
-      await audioPlayer.stop();
-      if (audioGeneration != _pranayamaAudioGeneration) {
+    final currentElapsed = _currentPranayamaElapsed;
+    if (forceRestart || !_pranayamaAudioEngine.hasClockAnchor) {
+      await _cancelScheduledPranayamaAudio();
+      final engineTime = _pranayamaAudioEngine.currentEngineTime;
+      if (engineTime == null) {
         return;
       }
-      await audioPlayer.setReleaseMode(toneClip.releaseMode);
-      await audioPlayer.play(
-        BytesSource(toneClip.bytes, mimeType: 'audio/wav'),
-        volume: 1,
+      _pranayamaAudioEngine.setClockAnchor(
+        elapsed: currentElapsed,
+        engineTime: engineTime + _pranayamaAudioStartLead,
       );
-      if (audioGeneration != _pranayamaAudioGeneration) {
-        await audioPlayer.stop();
-        return;
+    }
+
+    _pruneScheduledPranayamaAudio(currentElapsed);
+    await _schedulePranayamaAudioAhead(
+      currentElapsed: currentElapsed,
+      generation: generation,
+    );
+  }
+
+  Future<void> _schedulePranayamaAudioAhead({
+    required Duration currentElapsed,
+    required int generation,
+  }) async {
+    final preset = _activePranayamaPreset;
+    if (preset == null || generation != _pranayamaAudioGeneration) {
+      return;
+    }
+
+    final pendingTransition = _pendingPranayamaTransition;
+    final lookAheadEnd = currentElapsed + _pranayamaAudioLookAhead;
+    final activeTimelineId = _pranayamaAudioTimelineId(
+      preset: preset,
+      forcedSegmentIndex: _pranayamaRemoteControlEnabled
+          ? _activePranayamaSegmentIndex
+          : null,
+    );
+
+    await _schedulePranayamaAudioRange(
+      preset: preset,
+      timelineId: activeTimelineId,
+      forcedSegmentIndex: _pranayamaRemoteControlEnabled
+          ? _activePranayamaSegmentIndex
+          : null,
+      fromElapsed: currentElapsed,
+      untilElapsed: pendingTransition == null
+          ? lookAheadEnd
+          : _minDuration(lookAheadEnd, pendingTransition.applyAtElapsed),
+      engineTimeForElapsed: _pranayamaAudioEngine.engineTimeForElapsed,
+      effectiveEnd: _pranayamaRemoteControlEnabled
+          ? null
+          : _effectivePranayamaDuration(preset),
+      allowCycleBeyondUntilElapsed: pendingTransition == null,
+      generation: generation,
+    );
+
+    if (pendingTransition == null ||
+        lookAheadEnd <= pendingTransition.applyAtElapsed ||
+        generation != _pranayamaAudioGeneration) {
+      return;
+    }
+
+    final applyAtEngineTime =
+        pendingTransition.applyAtEngineTime ??
+        _pranayamaAudioEngine.engineTimeForElapsed(
+          pendingTransition.applyAtElapsed,
+        );
+    if (applyAtEngineTime == null) {
+      return;
+    }
+
+    final pendingTimelineId = _pranayamaAudioTimelineId(
+      preset: pendingTransition.preset,
+      forcedSegmentIndex: pendingTransition.segmentIndex,
+    );
+    await _schedulePranayamaAudioRange(
+      preset: pendingTransition.preset,
+      timelineId: pendingTimelineId,
+      forcedSegmentIndex: pendingTransition.segmentIndex,
+      fromElapsed: Duration.zero,
+      untilElapsed: lookAheadEnd - pendingTransition.applyAtElapsed,
+      engineTimeForElapsed: (elapsed) => applyAtEngineTime + elapsed,
+      effectiveEnd: null,
+      allowCycleBeyondUntilElapsed: true,
+      generation: generation,
+    );
+  }
+
+  Future<void> _schedulePranayamaAudioRange({
+    required PranayamaPreset preset,
+    required String timelineId,
+    required int? forcedSegmentIndex,
+    required Duration fromElapsed,
+    required Duration untilElapsed,
+    required Duration? Function(Duration elapsed) engineTimeForElapsed,
+    required Duration? effectiveEnd,
+    required bool allowCycleBeyondUntilElapsed,
+    required int generation,
+  }) async {
+    var cursor = fromElapsed.isNegative ? Duration.zero : fromElapsed;
+    var queuedCycles = 0;
+
+    while (cursor < untilElapsed &&
+        queuedCycles < _pranayamaAudioMaxQueuedCycles &&
+        generation == _pranayamaAudioGeneration) {
+      final existingCycle = _scheduledCycleCovering(
+        timelineId: timelineId,
+        elapsed: cursor,
+      );
+      if (existingCycle != null) {
+        cursor = existingCycle.endElapsed;
+        continue;
       }
-      if (seekPosition > Duration.zero) {
-        await audioPlayer.seek(seekPosition);
+
+      if (effectiveEnd != null && cursor >= effectiveEnd) {
+        break;
       }
+
+      final segmentPosition = _pranayamaSegmentAtElapsed(
+        preset,
+        cursor,
+        forcedSegmentIndex: forcedSegmentIndex,
+      );
+      final cycleDuration = _pranayamaCycleDurationForSegment(
+        segmentPosition.segment,
+      );
+      if (cycleDuration <= Duration.zero) {
+        break;
+      }
+      final cycleMilliseconds = math.max(1, cycleDuration.inMilliseconds);
+      final elapsedInCycle = Duration(
+        milliseconds:
+            segmentPosition.localElapsed.inMilliseconds % cycleMilliseconds,
+      );
+      final cycleRemaining = cycleDuration - elapsedInCycle;
+      if (elapsedInCycle > Duration.zero) {
+        final nextCycleBoundary = cursor + cycleRemaining;
+        if ((effectiveEnd != null && nextCycleBoundary > effectiveEnd) ||
+            (!allowCycleBeyondUntilElapsed &&
+                nextCycleBoundary > untilElapsed)) {
+          break;
+        }
+        // SoLoud's scheduled playback is sample-accurate when a whole voice is
+        // placed on the engine clock. Seeking a delayed scheduled voice proved
+        // fragile on quick pranayama timing changes, so partial current cycles
+        // are intentionally left to the already-playing handle and future
+        // audio is queued from the next breath boundary.
+        cursor = nextCycleBoundary;
+        continue;
+      }
+      final firstCycleEnd = cursor + cycleDuration;
+      if ((effectiveEnd != null && firstCycleEnd > effectiveEnd) ||
+          (!allowCycleBeyondUntilElapsed && firstCycleEnd > untilElapsed)) {
+        break;
+      }
+      final schedulingWindowEnd = effectiveEnd == null
+          ? untilElapsed
+          : _minDuration(effectiveEnd, untilElapsed);
+      final availableDuration = schedulingWindowEnd - cursor;
+      var cycleCount =
+          availableDuration.inMicroseconds ~/
+          math.max(1, cycleDuration.inMicroseconds);
+      cycleCount = cycleCount.clamp(1, _pranayamaAudioMaxQueuedCycles).toInt();
+      final playDuration = Duration(
+        microseconds: cycleDuration.inMicroseconds * cycleCount,
+      );
+      if (playDuration <= Duration.zero) {
+        break;
+      }
+
+      final atEngineTime = engineTimeForElapsed(cursor);
+      if (atEngineTime == null) {
+        break;
+      }
+
+      final toneClip = _toneChunkClipForPranayamaSegment(
+        segmentPosition.segment,
+        cycleCount: cycleCount,
+      );
+      final source = await _pranayamaAudioEngine.sourceForClip(
+        key: _pranayamaToneChunkCacheKeyForSegment(
+          segmentPosition.segment,
+          cycleCount,
+        ),
+        clip: toneClip,
+      );
+      if (source == null || generation != _pranayamaAudioGeneration) {
+        break;
+      }
+
+      final handle = _pranayamaAudioEngine.playScheduled(
+        source: source,
+        atEngineTime: atEngineTime,
+        duration: playDuration,
+      );
+      if (handle == null) {
+        break;
+      }
+
+      _scheduledPranayamaAudioCycles.add(
+        _ScheduledPranayamaCycle(
+          handle: handle,
+          timelineId: timelineId,
+          engineStartTime: atEngineTime,
+          engineEndTime: atEngineTime + playDuration,
+          startElapsed: cursor,
+          endElapsed: cursor + playDuration,
+        ),
+      );
+      cursor += playDuration;
+      queuedCycles += cycleCount;
+    }
+  }
+
+  _ScheduledPranayamaCycle? _scheduledCycleCovering({
+    required String timelineId,
+    required Duration elapsed,
+  }) {
+    for (final cycle in _scheduledPranayamaAudioCycles) {
+      if (cycle.timelineId == timelineId &&
+          cycle.startElapsed <= elapsed &&
+          cycle.endElapsed > elapsed) {
+        return cycle;
+      }
+    }
+    return null;
+  }
+
+  String _pranayamaAudioTimelineId({
+    required PranayamaPreset preset,
+    required int? forcedSegmentIndex,
+  }) {
+    if (preset.segments.isEmpty) {
+      return '${preset.id}:empty';
+    }
+
+    final clampedForcedSegmentIndex = forcedSegmentIndex
+        ?.clamp(0, preset.segments.length - 1)
+        .toInt();
+    final segmentKeys = forcedSegmentIndex == null
+        ? [
+            for (final segment in preset.segments)
+              _pranayamaToneCacheKeyForSegment(segment),
+          ]
+        : [
+            _pranayamaToneCacheKeyForSegment(
+              preset.segments[clampedForcedSegmentIndex!],
+            ),
+          ];
+    return [
+      preset.id,
+      clampedForcedSegmentIndex ?? 'sequence',
+      ...segmentKeys,
+    ].join(':');
+  }
+
+  Duration _minDuration(Duration first, Duration second) {
+    return first <= second ? first : second;
+  }
+
+  void _pruneScheduledPranayamaAudio(Duration currentElapsed) {
+    final engineTime = _pranayamaAudioEngine.currentEngineTime;
+    if (engineTime != null) {
+      _scheduledPranayamaAudioCycles.removeWhere(
+        (cycle) => cycle.engineEndTime <= engineTime,
+      );
+      return;
+    }
+
+    _scheduledPranayamaAudioCycles.removeWhere(
+      (cycle) => cycle.endElapsed <= currentElapsed,
+    );
+  }
+
+  Future<void> _cancelScheduledPranayamaAudio({
+    Duration? fromElapsed,
+    Duration? fromEngineTime,
+    Set<String> timelineIds = const <String>{},
+    String? keepCurrentTimelineId,
+    Duration? keepCurrentElapsed,
+    Duration? keepCurrentEngineTime,
+    Duration? stopKeptAtEngineTime,
+  }) async {
+    if (_scheduledPranayamaAudioCycles.isEmpty) {
+      return;
+    }
+
+    final elapsedCutoff = fromElapsed == null
+        ? null
+        : fromElapsed - _pranayamaTransitionCancelTolerance;
+    final engineCutoff = fromEngineTime == null
+        ? null
+        : fromEngineTime - _pranayamaTransitionCancelTolerance;
+    final engineKeepTime = keepCurrentEngineTime;
+    final elapsedKeepTime = keepCurrentElapsed;
+    final shouldStopAll =
+        fromElapsed == null && fromEngineTime == null && timelineIds.isEmpty;
+    final handlesToStop = <SoundHandle>[];
+    final handlesToStopAtBoundary = <SoundHandle>[];
+    _scheduledPranayamaAudioCycles.removeWhere((cycle) {
+      final shouldKeepCurrentCycle =
+          keepCurrentTimelineId != null &&
+          cycle.timelineId == keepCurrentTimelineId &&
+          elapsedKeepTime != null &&
+          cycle.startElapsed <= elapsedKeepTime &&
+          cycle.endElapsed > elapsedKeepTime &&
+          (engineKeepTime == null ||
+              (cycle.engineStartTime <=
+                      engineKeepTime + _pranayamaTransitionCancelTolerance &&
+                  cycle.engineEndTime > engineKeepTime));
+      if (shouldKeepCurrentCycle) {
+        if (stopKeptAtEngineTime != null) {
+          handlesToStopAtBoundary.add(cycle.handle);
+        }
+        return false;
+      }
+
+      final shouldStop =
+          shouldStopAll ||
+          timelineIds.contains(cycle.timelineId) ||
+          (elapsedCutoff != null && cycle.startElapsed >= elapsedCutoff) ||
+          (engineCutoff != null && cycle.engineStartTime >= engineCutoff);
+      if (shouldStop) {
+        handlesToStop.add(cycle.handle);
+      }
+      return shouldStop;
     });
-    await _pranayamaAudioPlayback;
+    _pranayamaAudioEngine.stopHandlesAt(
+      handlesToStopAtBoundary,
+      stopKeptAtEngineTime ?? Duration.zero,
+    );
+    await _pranayamaAudioEngine.stopHandles(handlesToStop);
   }
 
   Future<void> _mutePranayamaAudio() async {
     _pranayamaAudioGeneration++;
-    _pranayamaAudioPresetKey = null;
-    await _pranayamaAudioPlayer?.stop();
+    await _cancelScheduledPranayamaAudio();
+    _pranayamaAudioEngine.releaseClockAnchor();
   }
 
   Future<void> _stopPranayamaAudio() async {
     _pranayamaAudioGeneration++;
-    _pranayamaAudioPresetKey = null;
-    await _pranayamaAudioPlayer?.stop();
-    _pranayamaAudioPlayback = null;
+    await _cancelScheduledPranayamaAudio();
+    _pranayamaAudioEngine.releaseClockAnchor();
   }
 
-  void _disposePranayamaAudioPlayers() {
+  void _disposePranayamaAudioEngine() {
     _pranayamaAudioGeneration++;
-    _isPranayamaAudioContextConfigured = false;
-    unawaited(_pranayamaAudioPlayer?.dispose() ?? Future.value());
+    unawaited(() async {
+      await _cancelScheduledPranayamaAudio();
+      await _pranayamaAudioEngine.dispose();
+    }());
   }
 
   _PranayamaToneClip _toneClipForPranayamaSegment(PranayamaSegment segment) {
@@ -1563,6 +2470,20 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  _PranayamaToneClip _toneChunkClipForPranayamaSegment(
+    PranayamaSegment segment, {
+    required int cycleCount,
+  }) {
+    final cacheKey = _pranayamaToneChunkCacheKeyForSegment(segment, cycleCount);
+    return _pranayamaToneCache.putIfAbsent(
+      cacheKey,
+      () => _generatePranayamaToneChunkClip(
+        segment: segment,
+        cycleCount: cycleCount,
+      ),
+    );
+  }
+
   void _cachePranayamaSegmentTones(PranayamaPreset preset) {
     for (final segment in preset.segments) {
       _toneClipForPranayamaSegment(segment);
@@ -1570,6 +2491,14 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Duration get _currentPranayamaElapsed {
+    final engineElapsed =
+        _soundEnabled && !_isPranayamaPaused && _activePranayamaPreset != null
+        ? _pranayamaAudioEngine.currentElapsed
+        : null;
+    if (engineElapsed != null) {
+      return engineElapsed;
+    }
+
     if (_isPranayamaPaused || _pranayamaStartedAt == null) {
       return _pranayamaElapsedBeforePause;
     }
@@ -1727,6 +2656,13 @@ class _HomeScreenState extends State<HomeScreen> {
                       activePreset: _activePranayamaPreset,
                       elapsed: _currentPranayamaElapsed,
                       isPaused: _isPranayamaPaused,
+                      manualSegmentIndex: _pranayamaRemoteControlEnabled
+                          ? _activePranayamaSegmentIndex
+                          : null,
+                      pendingPreset: _pendingPranayamaTransition?.preset,
+                      pendingSegmentIndex:
+                          _pendingPranayamaTransition?.segmentIndex,
+                      remoteControlActive: _pranayamaRemoteControlEnabled,
                       onToggleRecentPresets: _toggleRecentPranayamaPresets,
                       onAddPreset: _createPranayamaPreset,
                       onAddFolder: _addPranayamaFolder,
@@ -1750,11 +2686,25 @@ class _HomeScreenState extends State<HomeScreen> {
                     HomeTab.settings => _SettingsTab(
                       soundEnabled: _soundEnabled,
                       turnScreenOnNearAudio: _turnScreenOnNearAudio,
+                      pranayamaRemoteControlEnabled:
+                          _pranayamaRemoteControlEnabled,
+                      pranayamaRemoteCommandBindings:
+                          _pranayamaRemoteCommandBindings,
                       recentTimerLimit: _recentTimerLimit,
                       onSoundEnabledChanged: (enabled) =>
                           _setSoundEnabled(enabled: enabled),
                       onTurnScreenOnNearAudioChanged: (enabled) =>
                           _setTurnScreenOnNearAudio(enabled: enabled),
+                      onPranayamaRemoteControlEnabledChanged: (enabled) =>
+                          _setPranayamaRemoteControlEnabled(enabled: enabled),
+                      onCapturePranayamaRemoteCommandKey:
+                          _capturePranayamaRemoteCommandKey,
+                      onClearPranayamaRemoteCommandKey:
+                          _clearPranayamaRemoteCommandKey,
+                      onOpenPranayamaRemoteDiagnostics:
+                          _openPranayamaRemoteDiagnostics,
+                      onOpenRemoteAccessibilitySettings:
+                          _openRemoteAccessibilitySettings,
                       onRecentTimerLimitChanged: _setRecentTimerLimit,
                       onTestSound: _testSound,
                       onPrepareBackgroundTimerSupport:
@@ -1777,6 +2727,513 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
     );
   }
+}
+
+class _PendingPranayamaTransition {
+  const _PendingPranayamaTransition({
+    required this.preset,
+    required this.segmentIndex,
+    required this.applyAtElapsed,
+    required this.applyAtEngineTime,
+    required this.recordRecentPreset,
+  });
+
+  final PranayamaPreset preset;
+  final int segmentIndex;
+  final Duration applyAtElapsed;
+  final Duration? applyAtEngineTime;
+  final bool recordRecentPreset;
+}
+
+class _PranayamaRemoteKeyCaptureDialog extends StatefulWidget {
+  const _PranayamaRemoteKeyCaptureDialog({
+    required this.command,
+    required this.remoteInputEvents,
+    required this.initialLatestSerial,
+  });
+
+  final PranayamaRemoteCommand command;
+  final ValueListenable<List<_PranayamaRemoteInputDebugEvent>>
+  remoteInputEvents;
+  final int initialLatestSerial;
+
+  @override
+  State<_PranayamaRemoteKeyCaptureDialog> createState() =>
+      _PranayamaRemoteKeyCaptureDialogState();
+}
+
+class _PranayamaRemoteKeyCaptureDialogState
+    extends State<_PranayamaRemoteKeyCaptureDialog> {
+  final FocusNode _focusNode = FocusNode();
+  late int _latestHandledSerial = widget.initialLatestSerial;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.remoteInputEvents.addListener(_handleNativeInputEvent);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        _focusNode.requestFocus();
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    widget.remoteInputEvents.removeListener(_handleNativeInputEvent);
+    _focusNode.dispose();
+    super.dispose();
+  }
+
+  void _handleNativeInputEvent() {
+    if (!mounted || widget.remoteInputEvents.value.isEmpty) {
+      return;
+    }
+
+    final event = widget.remoteInputEvents.value.first;
+    if (event.serial <= _latestHandledSerial) {
+      return;
+    }
+    _latestHandledSerial = event.serial;
+
+    final binding = event.binding;
+    if (binding == null ||
+        !event.isCommandTrigger ||
+        event.origin != 'activity' &&
+            event.origin != 'mediaSession' &&
+            event.origin != 'mediaSessionCallback' &&
+            event.origin != 'accessibility' &&
+            event.origin != 'genericMotion' &&
+            event.origin != 'trackball' &&
+            event.origin != 'touch' &&
+            event.origin != 'externalTouch') {
+      return;
+    }
+
+    Navigator.of(context).pop(binding);
+  }
+
+  KeyEventResult _handleKeyEvent(FocusNode node, KeyEvent event) {
+    if (event is! KeyDownEvent) {
+      return KeyEventResult.ignored;
+    }
+
+    Navigator.of(context).pop(
+      PranayamaRemoteInputBinding.flutterLogicalKey(event.logicalKey.keyId),
+    );
+    return KeyEventResult.handled;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      backgroundColor: const Color(0xFF19191D),
+      title: const Text('Set remote key'),
+      content: Focus(
+        autofocus: true,
+        focusNode: _focusNode,
+        onKeyEvent: _handleKeyEvent,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(minWidth: 260),
+          child: Text(
+            'Press a keyboard, media, scroll, or remote button for ${_pranayamaRemoteCommandLabel(widget.command)}.',
+            style: const TextStyle(color: Colors.white, letterSpacing: 0),
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          key: const ValueKey('cancel-pranayama-remote-key-capture-button'),
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+      ],
+    );
+  }
+}
+
+class _PranayamaRemoteDiagnosticsDialog extends StatelessWidget {
+  const _PranayamaRemoteDiagnosticsDialog({
+    required this.remoteInputEvents,
+    required this.onClear,
+  });
+
+  final ValueListenable<List<_PranayamaRemoteInputDebugEvent>>
+  remoteInputEvents;
+  final VoidCallback onClear;
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      backgroundColor: const Color(0xFF19191D),
+      title: const Text('Remote input diagnostics'),
+      content: SizedBox(
+        width: 360,
+        child: ValueListenableBuilder<List<_PranayamaRemoteInputDebugEvent>>(
+          valueListenable: remoteInputEvents,
+          builder: (context, events, _) {
+            if (events.isEmpty) {
+              return const Text(
+                'Press remote buttons now. If nothing appears here, Android is not delivering key, media, scroll, or pointer events to the app.',
+                style: TextStyle(color: _mutedTextColor, letterSpacing: 0),
+              );
+            }
+
+            return ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 420),
+              child: ListView.separated(
+                shrinkWrap: true,
+                itemCount: events.length,
+                separatorBuilder: (_, _) =>
+                    const Divider(height: 1, color: Color(0xFF303036)),
+                itemBuilder: (context, index) {
+                  final event = events[index];
+                  return Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    child: Text(
+                      event.diagnosticLabel,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 12,
+                        fontFeatures: [FontFeature.tabularFigures()],
+                        letterSpacing: 0,
+                      ),
+                    ),
+                  );
+                },
+              ),
+            );
+          },
+        ),
+      ),
+      actions: [
+        TextButton(
+          key: const ValueKey('clear-pranayama-remote-diagnostics-button'),
+          onPressed: onClear,
+          child: const Text('Clear'),
+        ),
+        TextButton(
+          key: const ValueKey('close-pranayama-remote-diagnostics-button'),
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Close'),
+        ),
+      ],
+    );
+  }
+}
+
+class _PranayamaRemoteInputDebugEvent {
+  const _PranayamaRemoteInputDebugEvent({
+    required this.serial,
+    required this.origin,
+    required this.action,
+    required this.label,
+    required this.binding,
+    this.details,
+    this.repeatCount = 0,
+    this.scanCode,
+    this.deviceId,
+    this.source,
+    this.eventTime,
+    this.downTime,
+  });
+
+  factory _PranayamaRemoteInputDebugEvent.fromFlutterKeyEvent({
+    required int serial,
+    required KeyEvent event,
+  }) {
+    final action = switch (event) {
+      KeyDownEvent() => 'down',
+      KeyRepeatEvent() => 'repeat',
+      KeyUpEvent() => 'up',
+      _ => 'unknown',
+    };
+    final binding = PranayamaRemoteInputBinding.flutterLogicalKey(
+      event.logicalKey.keyId,
+    );
+    return _PranayamaRemoteInputDebugEvent(
+      serial: serial,
+      origin: 'flutter',
+      action: action,
+      label: _pranayamaRemoteInputBindingLabel(binding),
+      binding: binding,
+      repeatCount: event is KeyRepeatEvent ? 1 : 0,
+    );
+  }
+
+  static _PranayamaRemoteInputDebugEvent? fromAndroidPayload({
+    required int serial,
+    required String method,
+    required Object? payload,
+  }) {
+    if (payload is! Map) {
+      return null;
+    }
+
+    return switch (method) {
+      'androidKeyEvent' => _fromAndroidKeyPayload(
+        serial: serial,
+        payload: payload,
+      ),
+      'androidMotionEvent' => _fromAndroidMotionPayload(
+        serial: serial,
+        payload: payload,
+      ),
+      _ => null,
+    };
+  }
+
+  static _PranayamaRemoteInputDebugEvent? _fromAndroidKeyPayload({
+    required int serial,
+    required Map<dynamic, dynamic> payload,
+  }) {
+    final keyCode = payload['keyCode'];
+    final action = payload['action'];
+    if (keyCode is! int || action is! int) {
+      return null;
+    }
+
+    final binding = PranayamaRemoteInputBinding.androidKeyCode(keyCode);
+    final origin = payload['origin'];
+    final keyLabel = payload['keyLabel'];
+    return _PranayamaRemoteInputDebugEvent(
+      serial: serial,
+      origin: origin is String ? origin : 'android',
+      action: switch (action) {
+        0 => 'down',
+        1 => 'up',
+        2 => 'multiple',
+        _ => 'action-$action',
+      },
+      label: keyLabel is String ? keyLabel : _androidKeyCodeLabel(keyCode),
+      binding: binding,
+      repeatCount: payload['repeatCount'] is int
+          ? payload['repeatCount'] as int
+          : 0,
+      scanCode: payload['scanCode'] is int ? payload['scanCode'] as int : null,
+      deviceId: payload['deviceId'] is int ? payload['deviceId'] as int : null,
+      source: payload['source'] is int ? payload['source'] as int : null,
+      eventTime: payload['eventTime'] is int
+          ? payload['eventTime'] as int
+          : null,
+      downTime: payload['downTime'] is int ? payload['downTime'] as int : null,
+    );
+  }
+
+  static _PranayamaRemoteInputDebugEvent? _fromAndroidMotionPayload({
+    required int serial,
+    required Map<dynamic, dynamic> payload,
+  }) {
+    final action = payload['action'];
+    if (action is! int) {
+      return null;
+    }
+
+    final origin = payload['origin'];
+    final actionLabel = payload['actionLabel'];
+    final verticalScroll = _remotePayloadDouble(payload['vscroll']) ?? 0;
+    final horizontalScroll = _remotePayloadDouble(payload['hscroll']) ?? 0;
+    final buttonState = payload['buttonState'] is int
+        ? payload['buttonState'] as int
+        : 0;
+    final actionButton = payload['actionButton'] is int
+        ? payload['actionButton'] as int
+        : 0;
+    final x = _remotePayloadDouble(payload['x']);
+    final y = _remotePayloadDouble(payload['y']);
+    final startX = _remotePayloadDouble(payload['startX']);
+    final startY = _remotePayloadDouble(payload['startY']);
+    final deltaX = _remotePayloadDouble(payload['deltaX']);
+    final deltaY = _remotePayloadDouble(payload['deltaY']);
+    final binding = _androidMotionBindingForPayload(
+      origin: origin is String ? origin : 'androidMotion',
+      action: action,
+      verticalScroll: verticalScroll,
+      horizontalScroll: horizontalScroll,
+      buttonState: buttonState,
+      actionButton: actionButton,
+      deltaX: deltaX,
+      deltaY: deltaY,
+    );
+    final details = [
+      if (verticalScroll.abs() > 0.001)
+        'v=${_remotePayloadDoubleLabel(verticalScroll)}',
+      if (horizontalScroll.abs() > 0.001)
+        'h=${_remotePayloadDoubleLabel(horizontalScroll)}',
+      if (buttonState != 0) 'buttons=$buttonState',
+      if (actionButton != 0) 'button=$actionButton',
+      if (startX != null) 'sx=${_remotePayloadDoubleLabel(startX)}',
+      if (startY != null) 'sy=${_remotePayloadDoubleLabel(startY)}',
+      if (deltaX != null) 'dx=${_remotePayloadDoubleLabel(deltaX)}',
+      if (deltaY != null) 'dy=${_remotePayloadDoubleLabel(deltaY)}',
+      if (x != null) 'x=${_remotePayloadDoubleLabel(x)}',
+      if (y != null) 'y=${_remotePayloadDoubleLabel(y)}',
+    ].join(' ');
+
+    return _PranayamaRemoteInputDebugEvent(
+      serial: serial,
+      origin: origin is String ? origin : 'androidMotion',
+      action: actionLabel is String ? actionLabel : 'action-$action',
+      label: binding == null
+          ? 'Android motion'
+          : _pranayamaRemoteInputBindingLabel(binding),
+      binding: binding,
+      details: details.isEmpty ? null : details,
+      deviceId: payload['deviceId'] is int ? payload['deviceId'] as int : null,
+      source: payload['source'] is int ? payload['source'] as int : null,
+      eventTime: payload['eventTime'] is int
+          ? payload['eventTime'] as int
+          : null,
+      downTime: payload['downTime'] is int ? payload['downTime'] as int : null,
+    );
+  }
+
+  final int serial;
+  final String origin;
+  final String action;
+  final String label;
+  final PranayamaRemoteInputBinding? binding;
+  final String? details;
+  final int repeatCount;
+  final int? scanCode;
+  final int? deviceId;
+  final int? source;
+  final int? eventTime;
+  final int? downTime;
+
+  bool get isDown => action == 'down';
+  bool get isCommandTrigger {
+    if (origin == 'accessibility') {
+      return action == 'up';
+    }
+    if (origin == 'externalTouch') {
+      return action == 'up';
+    }
+    return action == 'down' || action == 'scroll';
+  }
+
+  String? get androidCommandSignature {
+    if (binding == null ||
+        binding!.type == PranayamaRemoteInputType.flutterLogicalKey ||
+        eventTime == null) {
+      return null;
+    }
+    return '${binding!.type.name}:${binding!.code}:$action:$eventTime:$downTime';
+  }
+
+  String get diagnosticLabel {
+    final bindingLabel = binding == null
+        ? label
+        : _pranayamaRemoteInputBindingLabel(binding!);
+    return [
+      '#$serial',
+      origin,
+      action,
+      bindingLabel,
+      if (repeatCount > 0) 'repeat=$repeatCount',
+      ?details,
+      if (scanCode != null) 'scan=$scanCode',
+      if (deviceId != null) 'device=$deviceId',
+      if (source != null) 'source=$source',
+    ].join(' | ');
+  }
+}
+
+PranayamaRemoteInputBinding? _androidMotionBindingForPayload({
+  required String origin,
+  required int action,
+  required double verticalScroll,
+  required double horizontalScroll,
+  required int buttonState,
+  required int actionButton,
+  required double? deltaX,
+  required double? deltaY,
+}) {
+  const upAction = 1;
+  if (origin == 'externalTouch' && action == upAction) {
+    final dx = deltaX ?? 0;
+    final dy = deltaY ?? 0;
+    const swipeThreshold = 80.0;
+
+    if (dx.abs() < swipeThreshold && dy.abs() < swipeThreshold) {
+      return const PranayamaRemoteInputBinding.androidMotion(
+        _androidMotionExternalTouchTapCode,
+      );
+    }
+
+    if (dy.abs() >= dx.abs()) {
+      return PranayamaRemoteInputBinding.androidMotion(
+        dy < 0
+            ? _androidMotionExternalTouchSwipeUpCode
+            : _androidMotionExternalTouchSwipeDownCode,
+      );
+    }
+
+    return PranayamaRemoteInputBinding.androidMotion(
+      dx < 0
+          ? _androidMotionExternalTouchSwipeLeftCode
+          : _androidMotionExternalTouchSwipeRightCode,
+    );
+  }
+
+  const scrollAction = 8;
+  if (action == scrollAction) {
+    if (verticalScroll.abs() >= horizontalScroll.abs() &&
+        verticalScroll.abs() > 0.001) {
+      return PranayamaRemoteInputBinding.androidMotion(
+        verticalScroll > 0
+            ? _androidMotionVerticalScrollPositiveCode
+            : _androidMotionVerticalScrollNegativeCode,
+      );
+    }
+
+    if (horizontalScroll.abs() > 0.001) {
+      return PranayamaRemoteInputBinding.androidMotion(
+        horizontalScroll > 0
+            ? _androidMotionHorizontalScrollPositiveCode
+            : _androidMotionHorizontalScrollNegativeCode,
+      );
+    }
+  }
+
+  const downAction = 0;
+  if (action == downAction) {
+    final button = actionButton != 0 ? actionButton : buttonState;
+    return switch (button) {
+      1 => const PranayamaRemoteInputBinding.androidMotion(
+        _androidMotionPointerPrimaryClickCode,
+      ),
+      2 => const PranayamaRemoteInputBinding.androidMotion(
+        _androidMotionPointerSecondaryClickCode,
+      ),
+      4 => const PranayamaRemoteInputBinding.androidMotion(
+        _androidMotionPointerMiddleClickCode,
+      ),
+      8 => const PranayamaRemoteInputBinding.androidMotion(
+        _androidMotionPointerBackClickCode,
+      ),
+      16 => const PranayamaRemoteInputBinding.androidMotion(
+        _androidMotionPointerForwardClickCode,
+      ),
+      _ => null,
+    };
+  }
+
+  return null;
+}
+
+double? _remotePayloadDouble(Object? value) {
+  if (value is double) {
+    return value;
+  }
+  if (value is int) {
+    return value.toDouble();
+  }
+  return null;
+}
+
+String _remotePayloadDoubleLabel(double value) {
+  return value.toStringAsFixed(2);
 }
 
 int _clampRecentTimerLimit(int value) {

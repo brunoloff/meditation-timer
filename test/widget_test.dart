@@ -10,6 +10,46 @@ import 'package:shared_preferences_platform_interface/shared_preferences_async_p
 
 import 'package:breath_and_insight_timer/main.dart';
 
+const _remoteKeysTestChannel = 'bruno_meditation_timer/remote_keys';
+
+Future<void> _sendRemoteKeysMethodCall(MethodCall call) async {
+  await TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+      .handlePlatformMessage(
+        _remoteKeysTestChannel,
+        const StandardMethodCodec().encodeMethodCall(call),
+        (ByteData? _) {},
+      );
+}
+
+Future<void> _sendExternalTouchSwipe({
+  required Offset start,
+  required Offset end,
+  required int eventTime,
+}) {
+  return _sendRemoteKeysMethodCall(
+    MethodCall('androidMotionEvent', {
+      'origin': 'externalTouch',
+      'action': 1,
+      'actionLabel': 'up',
+      'deviceId': 11,
+      'source': 4098,
+      'eventTime': eventTime,
+      'downTime': eventTime - 80,
+      'startX': start.dx,
+      'startY': start.dy,
+      'x': end.dx,
+      'y': end.dy,
+      'deltaX': end.dx - start.dx,
+      'deltaY': end.dy - start.dy,
+      'vscroll': 0.0,
+      'hscroll': 0.0,
+      'buttonState': 0,
+      'actionButton': 0,
+      'pointerCount': 1,
+    }),
+  );
+}
+
 void main() {
   setUp(() {
     SharedPreferences.setMockInitialValues({});
@@ -55,6 +95,11 @@ void main() {
     expect(find.text('Sound'), findsOneWidget);
     expect(find.text('Turn screen back on near playing audio'), findsOneWidget);
     expect(find.text('Test sound'), findsOneWidget);
+    expect(find.text('Pranayama remote'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('pranayama-remote-control-switch')),
+      findsOneWidget,
+    );
     expect(find.text('Background timers'), findsOneWidget);
     expect(
       find.byKey(const ValueKey('prepare-background-timer-support-button')),
@@ -95,6 +140,10 @@ void main() {
     await tester.pumpWidget(const BreathAndInsightTimerApp());
     await tester.pump();
     await tester.tap(find.byKey(const ValueKey('settings-tab-button')));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(
+      find.byKey(const ValueKey('acknowledgements-button')),
+    );
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('acknowledgements-button')));
     await tester.pumpAndSettle();
@@ -295,17 +344,9 @@ void main() {
     );
   });
 
-  test('pranayama tone clips are longer than one breath cycle', () {
-    const finiteSegment = PranayamaSegment(
-      id: 'finite-tone',
-      duration: Duration(minutes: 15),
-      inBreath: Duration(seconds: 4),
-      firstHold: Duration.zero,
-      outBreath: Duration(seconds: 5),
-      secondHold: Duration.zero,
-    );
-    const infiniteSegment = PranayamaSegment(
-      id: 'infinite-tone',
+  test('pranayama tone clips are one silent-boundary breath cycle', () {
+    const segment = PranayamaSegment(
+      id: 'tone-cycle',
       duration: null,
       inBreath: Duration(seconds: 6),
       firstHold: Duration.zero,
@@ -313,20 +354,30 @@ void main() {
       secondHold: Duration.zero,
     );
 
+    expect(pranayamaToneClipDurationForTesting(segment), segment.cycleDuration);
+    expect(pranayamaToneBoundarySamplesForTesting(segment), [0, 0]);
+    expect(pranayamaTonePeakSampleForTesting(segment), lessThan(12000));
+  });
+
+  test('bell asset paths are normalized for Flutter asset loading', () {
     expect(
-      pranayamaToneClipDurationForTesting(finiteSegment),
-      effectivePranayamaDurationForTesting(
-        const PranayamaPreset(
-          id: 'finite-tone-preset',
-          name: 'Finite tone',
-          segments: [finiteSegment],
-        ),
-      ),
+      bellAssetKeyForTesting('audio/bells/wood-knock.mp3'),
+      'assets/audio/bells/wood-knock.mp3',
     );
     expect(
-      pranayamaToneClipDurationForTesting(infiniteSegment),
-      greaterThan(infiniteSegment.cycleDuration * 80),
+      bellAssetKeyForTesting('assets/audio/bells/wood-knock.mp3'),
+      'assets/audio/bells/wood-knock.mp3',
     );
+  });
+
+  testWidgets('normalized bell asset keys load bundled audio assets', (
+    WidgetTester tester,
+  ) async {
+    final assetData = await rootBundle.load(
+      bellAssetKeyForTesting('audio/bells/wood-knock.mp3'),
+    );
+
+    expect(assetData.lengthInBytes, greaterThan(0));
   });
 
   testWidgets('meditation screen can launch and pause pranayama presets', (
@@ -520,6 +571,240 @@ void main() {
       find.byKey(const ValueKey('sound-enabled-switch')),
     );
     expect(soundSwitch.value, isFalse);
+  });
+
+  testWidgets('pranayama remote key bindings can be captured and remembered', (
+    WidgetTester tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(800, 1500));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    await tester.pumpWidget(const BreathAndInsightTimerApp());
+    await tester.pump();
+
+    await tester.tap(find.byKey(const ValueKey('settings-tab-button')));
+    await tester.pumpAndSettle();
+
+    SwitchListTile remoteSwitch = tester.widget(
+      find.byKey(const ValueKey('pranayama-remote-control-switch')),
+    );
+    expect(remoteSwitch.value, isFalse);
+
+    await tester.tap(
+      find.byKey(const ValueKey('pranayama-remote-control-switch')),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(
+      find.byKey(const ValueKey('set-pranayama-remote-toggleStartStop-button')),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Set remote key'), findsOneWidget);
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.f9);
+    await tester.pumpAndSettle();
+
+    expect(find.text('F9'), findsWidgets);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump();
+    await tester.pumpWidget(const BreathAndInsightTimerApp());
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('settings-tab-button')));
+    await tester.pumpAndSettle();
+
+    remoteSwitch = tester.widget(
+      find.byKey(const ValueKey('pranayama-remote-control-switch')),
+    );
+    expect(remoteSwitch.value, isTrue);
+    expect(find.text('F9'), findsWidgets);
+  });
+
+  testWidgets('pranayama remote controls active session and segments', (
+    WidgetTester tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({
+      'soundEnabled': false,
+      'pranayamaRemoteControlEnabled': true,
+      'pranayamaRemoteCommandKeys': jsonEncode({
+        'toggleStartStop': LogicalKeyboardKey.f9.keyId,
+        'increaseBreathLengths': LogicalKeyboardKey.f10.keyId,
+        'nextSegment': LogicalKeyboardKey.f12.keyId,
+        'previousSegment': LogicalKeyboardKey.f8.keyId,
+      }),
+      'pranayamaEntries': jsonEncode([
+        {
+          'type': 'preset',
+          'preset': {
+            'id': 'remote-multi',
+            'name': 'Remote multi',
+            'note': '',
+            'segments': [
+              {
+                'id': 'remote-segment-one',
+                'durationSeconds': 1,
+                'inBreathSeconds': 1,
+                'firstHoldSeconds': 0,
+                'outBreathSeconds': 1,
+                'secondHoldSeconds': 0,
+              },
+              {
+                'id': 'remote-segment-two',
+                'durationSeconds': 2,
+                'inBreathSeconds': 2,
+                'firstHoldSeconds': 0,
+                'outBreathSeconds': 2,
+                'secondHoldSeconds': 0,
+              },
+            ],
+          },
+        },
+      ]),
+    });
+    await tester.binding.setSurfaceSize(const Size(800, 1100));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    await tester.pumpWidget(const BreathAndInsightTimerApp());
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('pranayama-tab-button')));
+    await tester.pumpAndSettle();
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.f9);
+    await tester.pump();
+
+    expect(find.text('Remote multi'), findsWidgets);
+    expect(find.text('1.0s'), findsNWidgets(2));
+
+    await tester.pump(const Duration(seconds: 3));
+    expect(find.text('Remote multi'), findsWidgets);
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.f10);
+    await tester.pump();
+
+    expect(find.text('1.0s'), findsNWidgets(2));
+    expect(find.text('1.1s'), findsNWidgets(2));
+
+    await tester.pump(const Duration(seconds: 2));
+
+    expect(find.text('1.1s'), findsNWidgets(2));
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.f12);
+    await tester.pump();
+
+    expect(find.text('1.1s'), findsNWidgets(2));
+    expect(find.text('2.2s'), findsNWidgets(2));
+
+    await tester.pump(const Duration(milliseconds: 2200));
+
+    expect(find.text('2.2s'), findsNWidgets(2));
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.f8);
+    await tester.pump();
+
+    expect(find.text('2.2s'), findsNWidgets(2));
+    expect(find.text('1.1s'), findsNWidgets(2));
+
+    await tester.pump(const Duration(milliseconds: 4400));
+
+    expect(find.text('1.1s'), findsNWidgets(2));
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.f9);
+    await tester.pump();
+
+    expect(find.text('Ready'), findsOneWidget);
+  });
+
+  testWidgets('external touch remote coalesces single and double gestures', (
+    WidgetTester tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({
+      'soundEnabled': false,
+      'pranayamaRemoteControlEnabled': true,
+      'pranayamaRemoteCommandKeys': jsonEncode({
+        'toggleStartStop': LogicalKeyboardKey.f9.keyId,
+        'increaseBreathLengths': {'type': 'androidMotion', 'code': 203},
+        'nextSegment': {'type': 'androidMotion', 'code': 204},
+      }),
+      'pranayamaEntries': jsonEncode([
+        {
+          'type': 'preset',
+          'preset': {
+            'id': 'external-touch-multi',
+            'name': 'External touch multi',
+            'note': '',
+            'segments': [
+              {
+                'id': 'external-touch-segment-one',
+                'durationSeconds': 1,
+                'inBreathSeconds': 1,
+                'firstHoldSeconds': 0,
+                'outBreathSeconds': 1,
+                'secondHoldSeconds': 0,
+              },
+              {
+                'id': 'external-touch-segment-two',
+                'durationSeconds': 2,
+                'inBreathSeconds': 2,
+                'firstHoldSeconds': 0,
+                'outBreathSeconds': 2,
+                'secondHoldSeconds': 0,
+              },
+            ],
+          },
+        },
+      ]),
+    });
+    await tester.binding.setSurfaceSize(const Size(800, 1100));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    await tester.pumpWidget(const BreathAndInsightTimerApp());
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('pranayama-tab-button')));
+    await tester.pumpAndSettle();
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.f9);
+    await tester.pump();
+
+    expect(find.text('External touch multi'), findsWidgets);
+    expect(find.text('1.0s'), findsNWidgets(2));
+
+    await _sendExternalTouchSwipe(
+      start: const Offset(300, 100),
+      end: const Offset(300, 240),
+      eventTime: 1000,
+    );
+    await tester.pump(const Duration(milliseconds: 250));
+
+    expect(find.text('1.1s'), findsNothing);
+    expect(find.text('2.0s'), findsNothing);
+
+    await _sendExternalTouchSwipe(
+      start: const Offset(300, 100),
+      end: const Offset(120, 100),
+      eventTime: 1300,
+    );
+    await tester.pump(const Duration(milliseconds: 499));
+
+    expect(find.text('1.1s'), findsNothing);
+    expect(find.text('2.0s'), findsNothing);
+
+    await tester.pump(const Duration(milliseconds: 1));
+
+    expect(find.text('1.0s'), findsNWidgets(2));
+    expect(find.text('1.1s'), findsNothing);
+    expect(find.text('2.0s'), findsNWidgets(2));
+
+    await tester.pump(const Duration(milliseconds: 2200));
+
+    expect(find.text('1.0s'), findsNothing);
+    expect(find.text('1.1s'), findsNothing);
+    expect(find.text('2.0s'), findsNWidgets(2));
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.f9);
+    await tester.pump();
+
+    expect(find.text('Ready'), findsOneWidget);
   });
 
   testWidgets(

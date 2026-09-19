@@ -17,18 +17,23 @@ class SelectSoundScreen extends StatefulWidget {
 
 class _SelectSoundScreenState extends State<SelectSoundScreen> {
   final Set<String> _selectedTags = <String>{};
-  final AudioPlayer _audioPlayer = AudioPlayer();
+  final _BellAudioEngine _bellAudioEngine = _BellAudioEngine.instance;
+  late final String _previewAudioGroup =
+      'sound-preview-${identityHashCode(this)}';
   late final Future<List<BellSound>> _soundsFuture = _loadDefaultBellSounds();
 
   @override
   void dispose() {
-    _audioPlayer.dispose();
+    unawaited(_bellAudioEngine.stopGroup(_previewAudioGroup));
     super.dispose();
   }
 
   Future<void> _playSound(BellSound sound) async {
-    await _audioPlayer.stop();
-    await _audioPlayer.play(AssetSource(sound.assetPath));
+    await _bellAudioEngine.play(
+      sound,
+      group: _previewAudioGroup,
+      replaceGroup: true,
+    );
   }
 
   void _selectSound(BellSound? sound) {

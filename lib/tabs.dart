@@ -2055,9 +2055,16 @@ class _SettingsTab extends StatelessWidget {
   const _SettingsTab({
     required this.soundEnabled,
     required this.turnScreenOnNearAudio,
+    required this.pranayamaRemoteControlEnabled,
+    required this.pranayamaRemoteCommandBindings,
     required this.recentTimerLimit,
     required this.onSoundEnabledChanged,
     required this.onTurnScreenOnNearAudioChanged,
+    required this.onPranayamaRemoteControlEnabledChanged,
+    required this.onCapturePranayamaRemoteCommandKey,
+    required this.onClearPranayamaRemoteCommandKey,
+    required this.onOpenPranayamaRemoteDiagnostics,
+    required this.onOpenRemoteAccessibilitySettings,
     required this.onRecentTimerLimitChanged,
     required this.onTestSound,
     required this.onPrepareBackgroundTimerSupport,
@@ -2073,9 +2080,17 @@ class _SettingsTab extends StatelessWidget {
 
   final bool soundEnabled;
   final bool turnScreenOnNearAudio;
+  final bool pranayamaRemoteControlEnabled;
+  final Map<PranayamaRemoteCommand, PranayamaRemoteInputBinding>
+  pranayamaRemoteCommandBindings;
   final int recentTimerLimit;
   final ValueChanged<bool> onSoundEnabledChanged;
   final ValueChanged<bool> onTurnScreenOnNearAudioChanged;
+  final ValueChanged<bool> onPranayamaRemoteControlEnabledChanged;
+  final ValueChanged<PranayamaRemoteCommand> onCapturePranayamaRemoteCommandKey;
+  final ValueChanged<PranayamaRemoteCommand> onClearPranayamaRemoteCommandKey;
+  final VoidCallback onOpenPranayamaRemoteDiagnostics;
+  final VoidCallback onOpenRemoteAccessibilitySettings;
   final ValueChanged<int> onRecentTimerLimitChanged;
   final VoidCallback onTestSound;
   final VoidCallback onPrepareBackgroundTimerSupport;
@@ -2182,6 +2197,66 @@ class _SettingsTab extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 28),
+        const _SectionHeader(title: 'Pranayama remote'),
+        const SizedBox(height: 12),
+        Material(
+          color: const Color(0xFF19191D),
+          borderRadius: BorderRadius.circular(8),
+          child: SwitchListTile(
+            key: const ValueKey('pranayama-remote-control-switch'),
+            value: pranayamaRemoteControlEnabled,
+            onChanged: onPranayamaRemoteControlEnabledChanged,
+            title: const Text(
+              'Remote control',
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 18,
+                fontWeight: FontWeight.w500,
+                letterSpacing: 0,
+              ),
+            ),
+            subtitle: const Text(
+              'Use hardware keys for active pranayama',
+              style: TextStyle(
+                color: _mutedTextColor,
+                fontSize: 13,
+                letterSpacing: 0,
+              ),
+            ),
+            activeThumbColor: Colors.white,
+            activeTrackColor: Color(0xFF6E6E76),
+            inactiveThumbColor: Color(0xFF77777C),
+            inactiveTrackColor: Color(0xFF2A2A2E),
+          ),
+        ),
+        if (pranayamaRemoteControlEnabled) ...[
+          const SizedBox(height: 12),
+          for (final command in PranayamaRemoteCommand.values) ...[
+            _PranayamaRemoteCommandKeyRow(
+              command: command,
+              binding: pranayamaRemoteCommandBindings[command],
+              onCapture: () => onCapturePranayamaRemoteCommandKey(command),
+              onClear: () => onClearPranayamaRemoteCommandKey(command),
+            ),
+            if (command != PranayamaRemoteCommand.values.last)
+              const SizedBox(height: 8),
+          ],
+          const SizedBox(height: 12),
+          _SettingsActionButton(
+            key: const ValueKey('pranayama-remote-diagnostics-button'),
+            onPressed: onOpenPranayamaRemoteDiagnostics,
+            icon: Icons.sensors_rounded,
+            label: 'Remote input diagnostics',
+          ),
+          const SizedBox(height: 12),
+          _SettingsActionButton(
+            key: const ValueKey('remote-accessibility-settings-button'),
+            onPressed: onOpenRemoteAccessibilitySettings,
+            icon: Icons.accessibility_new_rounded,
+            label: 'Open Android remote input setup',
+          ),
+        ],
+        const SizedBox(height: 28),
         const _SectionHeader(title: 'Background timers'),
         const SizedBox(height: 12),
         _SettingsActionButton(
@@ -2263,6 +2338,90 @@ class _SettingsTab extends StatelessWidget {
         ),
         const SizedBox(height: 660),
       ],
+    );
+  }
+}
+
+class _PranayamaRemoteCommandKeyRow extends StatelessWidget {
+  const _PranayamaRemoteCommandKeyRow({
+    required this.command,
+    required this.binding,
+    required this.onCapture,
+    required this.onClear,
+  });
+
+  final PranayamaRemoteCommand command;
+  final PranayamaRemoteInputBinding? binding;
+  final VoidCallback onCapture;
+  final VoidCallback onClear;
+
+  @override
+  Widget build(BuildContext context) {
+    final assignedKeyLabel = binding == null
+        ? 'Not set'
+        : _pranayamaRemoteInputBindingLabel(binding!);
+
+    return Material(
+      color: const Color(0xFF19191D),
+      borderRadius: BorderRadius.circular(8),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 10, 10, 10),
+        child: Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    _pranayamaRemoteCommandLabel(command),
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 15,
+                      fontWeight: FontWeight.w600,
+                      letterSpacing: 0,
+                    ),
+                  ),
+                  const SizedBox(height: 3),
+                  Text(
+                    assignedKeyLabel,
+                    key: ValueKey('pranayama-remote-${command.name}-key-label'),
+                    style: const TextStyle(
+                      color: _mutedTextColor,
+                      fontSize: 13,
+                      letterSpacing: 0,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            if (binding != null)
+              IconButton(
+                key: ValueKey('clear-pranayama-remote-${command.name}-button'),
+                onPressed: onClear,
+                tooltip: 'Clear key',
+                color: Colors.white,
+                icon: const Icon(Icons.close_rounded),
+              ),
+            OutlinedButton(
+              key: ValueKey('set-pranayama-remote-${command.name}-button'),
+              onPressed: onCapture,
+              style: OutlinedButton.styleFrom(
+                foregroundColor: Colors.white,
+                side: const BorderSide(color: _dividerColor),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                textStyle: const TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                  letterSpacing: 0,
+                ),
+              ),
+              child: const Text('Set'),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

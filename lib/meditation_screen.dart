@@ -57,7 +57,8 @@ class _MeditationSessionScreenState extends State<MeditationSessionScreen>
   final FocusNode _shortcutFocusNode = FocusNode(
     debugLabel: 'Meditation session shortcuts',
   );
-  final AudioPlayer _audioPlayer = AudioPlayer();
+  final _BellAudioEngine _bellAudioEngine = _BellAudioEngine.instance;
+  late final String _bellAudioGroup;
   Duration _elapsed = Duration.zero;
   // Raw session time includes preparation. The public meditation clock and logs
   // subtract preparation time so existing statistics keep their meaning.
@@ -80,6 +81,7 @@ class _MeditationSessionScreenState extends State<MeditationSessionScreen>
   @override
   void initState() {
     super.initState();
+    _bellAudioGroup = 'meditation-bell-${identityHashCode(this)}';
     WidgetsBinding.instance.addObserver(this);
     _startedAt = widget.now();
     _runStartedAt = _startedAt;
@@ -97,7 +99,7 @@ class _MeditationSessionScreenState extends State<MeditationSessionScreen>
     unawaited(widget.setWakeLockEnabled(false));
     unawaited(widget.backgroundTimerService.stop());
     _shortcutFocusNode.dispose();
-    _audioPlayer.dispose();
+    unawaited(_bellAudioEngine.stopGroup(_bellAudioGroup));
     super.dispose();
   }
 
@@ -420,12 +422,11 @@ class _MeditationSessionScreenState extends State<MeditationSessionScreen>
       return;
     }
 
-    await _configurePlayerForAudioMixing(_audioPlayer);
-    try {
-      await _audioPlayer.play(AssetSource(bell.assetPath));
-    } on Object {
-      return;
-    }
+    await _bellAudioEngine.play(
+      bell,
+      group: _bellAudioGroup,
+      replaceGroup: true,
+    );
   }
 
   Future<void> _playDueIntermediateBell(Duration elapsed) async {
@@ -910,15 +911,27 @@ class _MeditationPranayamaPanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final preset = snapshot.preset!;
-    final phase = _phaseSnapshotForPranayama(preset, snapshot.elapsed);
+    final forcedSegmentIndex = snapshot.remoteControlActive
+        ? snapshot.manualSegmentIndex
+        : null;
+    final phase = _phaseSnapshotForPranayama(
+      preset,
+      snapshot.elapsed,
+      forcedSegmentIndex: forcedSegmentIndex,
+    );
     final segmentPosition = _pranayamaSegmentAtElapsed(
       preset,
       snapshot.elapsed,
+      forcedSegmentIndex: forcedSegmentIndex,
     );
     final activeSegment = segmentPosition.segment;
-    final segmentRemaining = _remainingPranayamaSegmentDuration(
-      segmentPosition,
+    final pendingSegment = _pranayamaPendingSegment(
+      snapshot.pendingPreset,
+      snapshot.pendingSegmentIndex,
     );
+    final segmentRemaining = snapshot.remoteControlActive
+        ? null
+        : _remainingPranayamaSegmentDuration(segmentPosition);
     final bpm = activeSegment.cycleDuration == Duration.zero
         ? 0.0
         : 60 / activeSegment.cycleDuration.inMilliseconds * 1000;
@@ -939,6 +952,7 @@ class _MeditationPranayamaPanel extends StatelessWidget {
                 painter: _MeditationPranayamaWavePainter(
                   preset: preset,
                   elapsed: snapshot.elapsed,
+                  forcedSegmentIndex: forcedSegmentIndex,
                 ),
               ),
             ),
@@ -973,6 +987,17 @@ class _MeditationPranayamaPanel extends StatelessWidget {
                   fontSize: 34,
                   fontWeight: FontWeight.w300,
                   letterSpacing: 0,
+                ),
+              ),
+            ),
+            Positioned(
+              bottom: 58,
+              left: 0,
+              right: 0,
+              child: Center(
+                child: _CompactPranayamaTimingTable(
+                  segment: activeSegment,
+                  pendingSegment: pendingSegment,
                 ),
               ),
             ),
@@ -1036,10 +1061,12 @@ class _MeditationPranayamaWavePainter extends CustomPainter {
   const _MeditationPranayamaWavePainter({
     required this.preset,
     required this.elapsed,
+    required this.forcedSegmentIndex,
   });
 
   final PranayamaPreset preset;
   final Duration elapsed;
+  final int? forcedSegmentIndex;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -1059,6 +1086,7 @@ class _MeditationPranayamaWavePainter extends CustomPainter {
       preset,
       elapsed: elapsed,
       size: size,
+      forcedSegmentIndex: forcedSegmentIndex,
     );
 
     final path = Path()
@@ -1106,7 +1134,9 @@ class _MeditationPranayamaWavePainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _MeditationPranayamaWavePainter oldDelegate) {
-    return oldDelegate.preset != preset || oldDelegate.elapsed != elapsed;
+    return oldDelegate.preset != preset ||
+        oldDelegate.elapsed != elapsed ||
+        oldDelegate.forcedSegmentIndex != forcedSegmentIndex;
   }
 }
 

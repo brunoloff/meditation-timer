@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Meditation Timer</string>
+    <string name="remote_input_accessibility_label">Meditation Timer remote input</string>
+    <string name="remote_input_accessibility_summary">Detect Bluetooth remote key presses for pranayama controls.</string>
+    <string name="remote_input_accessibility_description">Allows Meditation Timer to detect hardware key presses from a Bluetooth remote so they can control an active pranayama session. The service does not inspect screen content.</string>
+</resources>

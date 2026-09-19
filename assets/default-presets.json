@@ -183,6 +183,29 @@
               "secondHoldSeconds": 0
             }
           ]
+        },
+        {
+          "id": "pranayama-hrv-hpv-breathing",
+          "name": "HRV & HPV Breathing",
+          "note": "",
+          "segments": [
+            {
+              "id": "segment-hrv-hpv-breathing-hrv",
+              "durationSeconds": 720,
+              "inBreathSeconds": 5,
+              "firstHoldSeconds": 0,
+              "outBreathSeconds": 7,
+              "secondHoldSeconds": 0
+            },
+            {
+              "id": "segment-hrv-hpv-breathing-hpv",
+              "durationSeconds": 300,
+              "inBreathSeconds": 5,
+              "firstHoldSeconds": 6,
+              "outBreathSeconds": 7,
+              "secondHoldSeconds": 0
+            }
+          ]
         }
       ]
     }

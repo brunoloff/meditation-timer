@@ -3,8 +3,207 @@ part of 'main.dart';
 const _recentPranayamaCollapsedKey = 'recentPranayamaCollapsed';
 const _recentPranayamaPresetIdsKey = 'recentPranayamaPresetIds';
 const _pranayamaEntriesKey = 'pranayamaEntries';
+const _pranayamaRemoteControlEnabledKey = 'pranayamaRemoteControlEnabled';
+const _pranayamaRemoteCommandKeysKey = 'pranayamaRemoteCommandKeys';
 const _pranayamaLeadDuration = Duration(seconds: 1);
-const _maxGeneratedPranayamaToneClipDuration = Duration(minutes: 20);
+
+enum PranayamaRemoteCommand {
+  toggleStartStop,
+  increaseBreathLengths,
+  decreaseBreathLengths,
+  nextSegment,
+  previousSegment,
+}
+
+enum PranayamaRemoteInputType {
+  flutterLogicalKey,
+  androidKeyCode,
+  androidMotion,
+}
+
+const _androidMotionVerticalScrollPositiveCode = 1;
+const _androidMotionVerticalScrollNegativeCode = 2;
+const _androidMotionHorizontalScrollPositiveCode = 3;
+const _androidMotionHorizontalScrollNegativeCode = 4;
+const _androidMotionPointerPrimaryClickCode = 101;
+const _androidMotionPointerSecondaryClickCode = 102;
+const _androidMotionPointerMiddleClickCode = 103;
+const _androidMotionPointerBackClickCode = 104;
+const _androidMotionPointerForwardClickCode = 105;
+const _androidMotionExternalTouchTapCode = 201;
+const _androidMotionExternalTouchSwipeUpCode = 202;
+const _androidMotionExternalTouchSwipeDownCode = 203;
+const _androidMotionExternalTouchSwipeLeftCode = 204;
+const _androidMotionExternalTouchSwipeRightCode = 205;
+
+class PranayamaRemoteInputBinding {
+  const PranayamaRemoteInputBinding({required this.type, required this.code});
+
+  const PranayamaRemoteInputBinding.flutterLogicalKey(int keyId)
+    : type = PranayamaRemoteInputType.flutterLogicalKey,
+      code = keyId;
+
+  const PranayamaRemoteInputBinding.androidKeyCode(int keyCode)
+    : type = PranayamaRemoteInputType.androidKeyCode,
+      code = keyCode;
+
+  const PranayamaRemoteInputBinding.androidMotion(int motionCode)
+    : type = PranayamaRemoteInputType.androidMotion,
+      code = motionCode;
+
+  final PranayamaRemoteInputType type;
+  final int code;
+
+  Object encode() {
+    return {'type': type.name, 'code': code};
+  }
+
+  static PranayamaRemoteInputBinding? decode(Object? encoded) {
+    if (encoded is int && encoded > 0) {
+      return PranayamaRemoteInputBinding.flutterLogicalKey(encoded);
+    }
+
+    if (encoded is! Map<String, Object?>) {
+      return null;
+    }
+
+    final typeName = encoded['type'];
+    final code = encoded['code'];
+    if (typeName is! String || code is! int || code <= 0) {
+      return null;
+    }
+
+    PranayamaRemoteInputType? type;
+    for (final candidate in PranayamaRemoteInputType.values) {
+      if (candidate.name == typeName) {
+        type = candidate;
+        break;
+      }
+    }
+    if (type == null) {
+      return null;
+    }
+
+    return PranayamaRemoteInputBinding(type: type, code: code);
+  }
+
+  @override
+  bool operator ==(Object other) {
+    return other is PranayamaRemoteInputBinding &&
+        other.type == type &&
+        other.code == code;
+  }
+
+  @override
+  int get hashCode => Object.hash(type, code);
+}
+
+String _pranayamaRemoteCommandLabel(PranayamaRemoteCommand command) {
+  return switch (command) {
+    PranayamaRemoteCommand.toggleStartStop => 'Start/stop pranayama',
+    PranayamaRemoteCommand.increaseBreathLengths =>
+      'Increase breath lengths by 10%',
+    PranayamaRemoteCommand.decreaseBreathLengths =>
+      'Decrease breath lengths by 10%',
+    PranayamaRemoteCommand.nextSegment => 'Next segment',
+    PranayamaRemoteCommand.previousSegment => 'Previous segment',
+  };
+}
+
+Map<String, Object> _encodePranayamaRemoteCommandKeys(
+  Map<PranayamaRemoteCommand, PranayamaRemoteInputBinding> commandKeys,
+) {
+  return {
+    for (final entry in commandKeys.entries)
+      entry.key.name: entry.value.encode(),
+  };
+}
+
+Map<PranayamaRemoteCommand, PranayamaRemoteInputBinding>
+_decodePranayamaRemoteCommandKeys(String? encodedCommandKeys) {
+  if (encodedCommandKeys == null) {
+    return const {};
+  }
+
+  try {
+    final decoded = jsonDecode(encodedCommandKeys);
+    if (decoded is! Map<String, Object?>) {
+      return const {};
+    }
+
+    final commandKeys = <PranayamaRemoteCommand, PranayamaRemoteInputBinding>{};
+    for (final command in PranayamaRemoteCommand.values) {
+      final binding = PranayamaRemoteInputBinding.decode(decoded[command.name]);
+      if (binding != null) {
+        commandKeys[command] = binding;
+      }
+    }
+    return commandKeys;
+  } on FormatException {
+    return const {};
+  } on TypeError {
+    return const {};
+  }
+}
+
+String _pranayamaRemoteInputBindingLabel(PranayamaRemoteInputBinding binding) {
+  return switch (binding.type) {
+    PranayamaRemoteInputType.flutterLogicalKey => _logicalKeyboardKeyLabel(
+      binding.code,
+    ),
+    PranayamaRemoteInputType.androidKeyCode => _androidKeyCodeLabel(
+      binding.code,
+    ),
+    PranayamaRemoteInputType.androidMotion => _androidMotionLabel(binding.code),
+  };
+}
+
+String _logicalKeyboardKeyLabel(int keyId) {
+  final key = LogicalKeyboardKey(keyId);
+  if (key.keyLabel.trim().isNotEmpty) {
+    return key.keyLabel;
+  }
+  return key.debugName ?? 'Key 0x${keyId.toRadixString(16)}';
+}
+
+String _androidKeyCodeLabel(int keyCode) {
+  return switch (keyCode) {
+    4 => 'Android Back',
+    24 => 'Volume up',
+    25 => 'Volume down',
+    79 => 'Headset hook',
+    85 => 'Media play/pause',
+    86 => 'Media stop',
+    87 => 'Media next',
+    88 => 'Media previous',
+    89 => 'Media rewind',
+    90 => 'Media fast forward',
+    126 => 'Media play',
+    127 => 'Media pause',
+    _ => 'Android key $keyCode',
+  };
+}
+
+String _androidMotionLabel(int motionCode) {
+  return switch (motionCode) {
+    _androidMotionVerticalScrollPositiveCode => 'Android scroll up',
+    _androidMotionVerticalScrollNegativeCode => 'Android scroll down',
+    _androidMotionHorizontalScrollPositiveCode => 'Android horizontal scroll +',
+    _androidMotionHorizontalScrollNegativeCode => 'Android horizontal scroll -',
+    _androidMotionPointerPrimaryClickCode => 'Android pointer primary click',
+    _androidMotionPointerSecondaryClickCode =>
+      'Android pointer secondary click',
+    _androidMotionPointerMiddleClickCode => 'Android pointer middle click',
+    _androidMotionPointerBackClickCode => 'Android pointer back click',
+    _androidMotionPointerForwardClickCode => 'Android pointer forward click',
+    _androidMotionExternalTouchTapCode => 'External touch tap',
+    _androidMotionExternalTouchSwipeUpCode => 'External touch swipe up',
+    _androidMotionExternalTouchSwipeDownCode => 'External touch swipe down',
+    _androidMotionExternalTouchSwipeLeftCode => 'External touch swipe left',
+    _androidMotionExternalTouchSwipeRightCode => 'External touch swipe right',
+    _ => 'Android motion $motionCode',
+  };
+}
 
 class PranayamaPreset {
   const PranayamaPreset({
@@ -126,17 +325,29 @@ class PranayamaSessionSnapshot {
     required this.preset,
     required this.elapsed,
     required this.isPaused,
+    this.manualSegmentIndex,
+    this.pendingPreset,
+    this.pendingSegmentIndex,
+    this.remoteControlActive = false,
   });
 
   static const empty = PranayamaSessionSnapshot(
     preset: null,
     elapsed: Duration.zero,
     isPaused: false,
+    manualSegmentIndex: null,
+    pendingPreset: null,
+    pendingSegmentIndex: null,
+    remoteControlActive: false,
   );
 
   final PranayamaPreset? preset;
   final Duration elapsed;
   final bool isPaused;
+  final int? manualSegmentIndex;
+  final PranayamaPreset? pendingPreset;
+  final int? pendingSegmentIndex;
+  final bool remoteControlActive;
 
   bool get isActive => preset != null;
 }
@@ -276,6 +487,30 @@ const _fourFiveSixBpvBreathingPreset = PranayamaPreset(
   ],
 );
 
+const _hrvHpvBreathingPreset = PranayamaPreset(
+  id: 'pranayama-hrv-hpv-breathing',
+  name: 'HRV & HPV Breathing',
+  note: '',
+  segments: [
+    PranayamaSegment(
+      id: 'segment-hrv-hpv-breathing-hrv',
+      duration: Duration(minutes: 12),
+      inBreath: Duration(seconds: 5),
+      firstHold: Duration.zero,
+      outBreath: Duration(seconds: 7),
+      secondHold: Duration.zero,
+    ),
+    PranayamaSegment(
+      id: 'segment-hrv-hpv-breathing-hpv',
+      duration: Duration(minutes: 5),
+      inBreath: Duration(seconds: 5),
+      firstHold: Duration(seconds: 6),
+      outBreath: Duration(seconds: 7),
+      secondHold: Duration.zero,
+    ),
+  ],
+);
+
 const _forrestKnutsonPranayamaFolder = PranayamaFolder(
   name: 'Forrest Knutson',
   presets: [
@@ -283,6 +518,7 @@ const _forrestKnutsonPranayamaFolder = PranayamaFolder(
     _fiveSixHrvBreathingPreset,
     _sixSevenHrvBreathingPreset,
     _fourFiveSixBpvBreathingPreset,
+    _hrvHpvBreathingPreset,
   ],
 );
 
@@ -370,9 +606,22 @@ class PranayamaSegmentPosition {
 
 PranayamaSegmentPosition _pranayamaSegmentAtElapsed(
   PranayamaPreset preset,
-  Duration elapsed,
-) {
+  Duration elapsed, {
+  int? forcedSegmentIndex,
+}) {
   final clampedElapsed = elapsed.isNegative ? Duration.zero : elapsed;
+  if (forcedSegmentIndex != null && preset.segments.isNotEmpty) {
+    final index = forcedSegmentIndex
+        .clamp(0, preset.segments.length - 1)
+        .toInt();
+    return PranayamaSegmentPosition(
+      segment: preset.segments[index],
+      index: index,
+      localElapsed: clampedElapsed,
+      segmentStart: _pranayamaSegmentStartForIndex(preset, index),
+    );
+  }
+
   var segmentStart = Duration.zero;
 
   for (var index = 0; index < preset.segments.length; index += 1) {
@@ -400,11 +649,25 @@ PranayamaSegmentPosition _pranayamaSegmentAtElapsed(
   );
 }
 
+Duration _pranayamaSegmentStartForIndex(PranayamaPreset preset, int index) {
+  var segmentStart = Duration.zero;
+  final clampedIndex = index.clamp(0, preset.segments.length - 1).toInt();
+  for (var cursor = 0; cursor < clampedIndex; cursor += 1) {
+    final effectiveDuration = _effectivePranayamaSegmentDuration(
+      preset.segments[cursor],
+    );
+    if (effectiveDuration == null) {
+      return segmentStart;
+    }
+    segmentStart += effectiveDuration;
+  }
+  return segmentStart;
+}
+
 enum _PranayamaSoundPhase { inhale, exhale, silent }
 
 String _pranayamaToneCacheKeyForSegment(PranayamaSegment segment) {
   return [
-    segment.duration?.inMilliseconds ?? 'infinite',
     segment.inBreath.inMilliseconds,
     segment.firstHold.inMilliseconds,
     segment.outBreath.inMilliseconds,
@@ -412,32 +675,22 @@ String _pranayamaToneCacheKeyForSegment(PranayamaSegment segment) {
   ].join('-');
 }
 
+String _pranayamaToneChunkCacheKeyForSegment(
+  PranayamaSegment segment,
+  int cycleCount,
+) {
+  return '${_pranayamaToneCacheKeyForSegment(segment)}x$cycleCount';
+}
+
 class _PranayamaToneClip {
-  const _PranayamaToneClip({
-    required this.bytes,
-    required this.duration,
-    required this.releaseMode,
-  });
+  const _PranayamaToneClip({required this.bytes, required this.duration});
 
   final Uint8List bytes;
   final Duration duration;
-  final ReleaseMode releaseMode;
 }
 
 Duration _pranayamaToneClipDurationForSegment(PranayamaSegment segment) {
-  final cycleDuration = _pranayamaCycleDurationForSegment(segment);
-  final cycleMilliseconds = math.max(1, cycleDuration.inMilliseconds);
-  final effectiveDuration = _effectivePranayamaSegmentDuration(segment);
-  final desiredDuration =
-      effectiveDuration == null ||
-          effectiveDuration > _maxGeneratedPranayamaToneClipDuration
-      ? _maxGeneratedPranayamaToneClipDuration
-      : effectiveDuration;
-  final cycleCount = math.max(
-    1,
-    desiredDuration.inMilliseconds ~/ cycleMilliseconds,
-  );
-  return Duration(milliseconds: cycleMilliseconds * cycleCount);
+  return _pranayamaCycleDurationForSegment(segment);
 }
 
 @visibleForTesting
@@ -445,43 +698,80 @@ Duration pranayamaToneClipDurationForTesting(PranayamaSegment segment) {
   return _pranayamaToneClipDurationForSegment(segment);
 }
 
+@visibleForTesting
+List<int> pranayamaToneBoundarySamplesForTesting(PranayamaSegment segment) {
+  final clip = _generatePranayamaToneClip(segment);
+  final byteData = ByteData.sublistView(clip.bytes);
+  final lastSampleOffset = clip.bytes.length - _pranayamaToneBytesPerSample;
+  return [
+    byteData.getInt16(_wavHeaderLength, Endian.little),
+    byteData.getInt16(lastSampleOffset, Endian.little),
+  ];
+}
+
+@visibleForTesting
+int pranayamaTonePeakSampleForTesting(PranayamaSegment segment) {
+  final clip = _generatePranayamaToneClip(segment);
+  final byteData = ByteData.sublistView(clip.bytes);
+  var peak = 0;
+  for (
+    var offset = _wavHeaderLength;
+    offset < clip.bytes.length;
+    offset += _pranayamaToneBytesPerSample
+  ) {
+    peak = math.max(peak, byteData.getInt16(offset, Endian.little).abs());
+  }
+  return peak;
+}
+
 _PranayamaToneClip _generatePranayamaToneClip(PranayamaSegment segment) {
-  // The visual guide runs from wall-clock time. If audio loops every breath
-  // cycle, tiny platform loop delays can accumulate until the tone lags behind
-  // the dot. Instead, generate a longer whole-cycle WAV clip. Finite segments
-  // up to the cap play once; infinite or very long segments loop far less often.
-  final cycleBytes = _generatePranayamaCycleToneBytes(segment);
-  final cycleDataSize = cycleBytes.length - _wavHeaderLength;
+  // SoLoud schedules these one-cycle WAVs against its own audio clock. That
+  // gives us exact phase boundaries without relying on platform loop timing.
   final clipDuration = _pranayamaToneClipDurationForSegment(segment);
-  final cycleDuration = _pranayamaCycleDurationForSegment(segment);
-  final cycleCount = math.max(
-    1,
-    clipDuration.inMilliseconds ~/ math.max(1, cycleDuration.inMilliseconds),
+  return _PranayamaToneClip(
+    bytes: _generatePranayamaCycleToneBytes(segment),
+    duration: clipDuration,
   );
-  final dataSize = cycleDataSize * cycleCount;
+}
+
+_PranayamaToneClip _generatePranayamaToneChunkClip({
+  required PranayamaSegment segment,
+  required int cycleCount,
+}) {
+  final clampedCycleCount = math.max(1, cycleCount);
+  final cycleClip = _generatePranayamaToneClip(segment);
+  if (clampedCycleCount == 1) {
+    return cycleClip;
+  }
+
+  // Remote-control transitions should only need to stop the one active voice
+  // at the next breath boundary. Repeating complete PCM cycles in one WAV keeps
+  // that voice active while avoiding a queue of delayed future voices that must
+  // later be cancelled.
+  final cycleDataSize = cycleClip.bytes.length - _wavHeaderLength;
+  final dataSize = cycleDataSize * clampedCycleCount;
   final bytes = Uint8List(_wavHeaderLength + dataSize);
   _writeWavHeader(bytes, dataSize: dataSize);
 
-  for (var cycleIndex = 0; cycleIndex < cycleCount; cycleIndex += 1) {
+  for (var cycleIndex = 0; cycleIndex < clampedCycleCount; cycleIndex += 1) {
+    final writeOffset = _wavHeaderLength + cycleIndex * cycleDataSize;
     bytes.setRange(
-      _wavHeaderLength + cycleIndex * cycleDataSize,
-      _wavHeaderLength + (cycleIndex + 1) * cycleDataSize,
-      cycleBytes,
+      writeOffset,
+      writeOffset + cycleDataSize,
+      cycleClip.bytes,
       _wavHeaderLength,
     );
   }
 
-  final effectiveDuration = _effectivePranayamaSegmentDuration(segment);
-  final shouldLoop =
-      effectiveDuration == null || clipDuration < effectiveDuration;
   return _PranayamaToneClip(
     bytes: bytes,
-    duration: clipDuration,
-    releaseMode: shouldLoop ? ReleaseMode.loop : ReleaseMode.stop,
+    duration: Duration(
+      microseconds: cycleClip.duration.inMicroseconds * clampedCycleCount,
+    ),
   );
 }
 
-const _pranayamaToneSampleRate = 24000;
+const _pranayamaToneSampleRate = _soloudOutputSampleRate;
 const _pranayamaToneBytesPerSample = 2;
 const _pranayamaToneChannelCount = 1;
 const _wavHeaderLength = 44;
