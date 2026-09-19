@@ -1070,7 +1070,7 @@ class _StatsTabState extends State<_StatsTab> {
       future: _entriesFuture,
       builder: (context, snapshot) {
         final entries = snapshot.data ?? const <MeditationLogEntry>[];
-        final streakStats = _streakStatsBeforeToday(entries);
+        final streakStats = _currentStreakStats(entries);
         final streakLength = streakStats.length;
         final allTimeDurationStats = _durationStatsForAllLoggedDays(entries);
         final buckets = _statsBucketsFor(
@@ -1661,7 +1661,7 @@ class _StatsBarChart extends StatelessWidget {
   }
 }
 
-_StreakStats _streakStatsBeforeToday(List<MeditationLogEntry> entries) {
+_StreakStats _currentStreakStats(List<MeditationLogEntry> entries) {
   final durationSecondsByDay = <int, int>{};
   for (final entry in entries) {
     final dayNumber = _dayNumber(entry.startedAt);
@@ -1669,7 +1669,10 @@ _StreakStats _streakStatsBeforeToday(List<MeditationLogEntry> entries) {
         (durationSecondsByDay[dayNumber] ?? 0) + entry.duration.inSeconds;
   }
 
-  var cursor = _dayNumber(DateTime.now()) - 1;
+  final today = _dayNumber(DateTime.now());
+  // Include today once logged; before today's first session, yesterday's streak
+  // remains current. Share this rule with the session summary and repair preview.
+  var cursor = durationSecondsByDay.containsKey(today) ? today : today - 1;
   var streakLength = 0;
   final streakDaySeconds = <int>[];
 

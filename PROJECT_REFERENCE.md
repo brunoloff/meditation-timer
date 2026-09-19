@@ -351,8 +351,10 @@ The Stats tab currently includes:
 
 Current streak definition:
 
-- Count consecutive days before/today according to the app's current logic where
-  there is at least one log entry.
+- Count consecutive calendar days with at least one log entry, including today
+  if logged. Before today's first session, count back from yesterday instead.
+- Stats, streak details, repair previews, and the session summary share this
+  calculation. Multiple entries on the same day count as one day.
 - A zero-minute log can repair a missing day.
 
 Streak repair:

@@ -1383,22 +1383,9 @@ _MeditationSummary _summaryForCompletedSession(
     totalTimeToday: Duration(
       seconds: existingSecondsToday + completedSecondsToday,
     ),
-    streakLength: _streakLengthThroughToday(entriesAfterCompletion),
+    streakLength: _currentStreakStats(entriesAfterCompletion).length,
     streakAlreadyIncreasedToday: existingEntriesToday.isNotEmpty,
   );
-}
-
-int _streakLengthThroughToday(List<MeditationLogEntry> entries) {
-  final loggedDays = {for (final entry in entries) _dayNumber(entry.startedAt)};
-
-  var cursor = _dayNumber(DateTime.now());
-  var streakLength = 0;
-  while (loggedDays.contains(cursor)) {
-    streakLength += 1;
-    cursor -= 1;
-  }
-
-  return streakLength;
 }
 
 class _RunningControls extends StatelessWidget {
