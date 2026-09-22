@@ -7,6 +7,16 @@ basic practice statistics.
 
 The Android launcher label is `Meditation Timer`.
 
+## Version 1.0.5
+
+Optional Bluetooth remote controls can start/stop pranayama, adjust breath
+lengths, and select segments without touching the phone. Remote control is off
+by default; ordinary timed sessions keep their existing behavior. Existing
+presets, sound selections, logs, and preferences are preserved on upgrade.
+
+See [CHANGELOG.md](CHANGELOG.md) for release notes and
+[PROJECT_REFERENCE.md](PROJECT_REFERENCE.md) for architecture and behavior.
+
 ## License
 
 The app source code is licensed under the GNU General Public License version 3.
@@ -45,3 +55,19 @@ fvm flutter build apk --debug
 
 Release APKs are left unsigned by the checked-in Android Gradle configuration so
 F-Droid can build and sign them in its own environment.
+
+The native audio engine builds from source. Android disables SoLoud's optional
+precompiled Xiph codecs with `NO_XIPH_LIBS=true`; the app uses MP3 bells and
+generated WAV tones, which do not require those codecs.
+
+If Flutter selects Java 25 and Gradle rejects it, build using Java 17 instead:
+
+```sh
+cd android
+JAVA_HOME=/usr/lib/jvm/java-17-openjdk ./gradlew assembleDebug
+```
+
+Upgrade an F-Droid installation through F-Droid so the signing key stays the
+same. Do not uninstall it to install a differently signed developer build;
+uninstalling removes local app data. Export logs and presets before switching
+distribution channels.

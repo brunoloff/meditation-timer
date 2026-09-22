@@ -3,6 +3,7 @@ Bruno's Meditation Timer is a simple, offline meditation and pranayama timer.
 Features:
 * Meditation timer with custom presets, each with configurable starting, intermediate, and ending bells.
 * Pranayama timer with auditory and visual guidance and generated breath tones.
+* Multi-segment pranayama presets and optional Bluetooth remote controls for starting/stopping, adjusting breath lengths, and changing segments at cycle boundaries. Remote control is off by default.
 * Session logging, CSV import/export, streak tracking with streak repair, and basic statistics.
 * Local preset import/export, import compatible with Insight Timer.
 * No account, ads, analytics, tracking, or network service is required for core use.

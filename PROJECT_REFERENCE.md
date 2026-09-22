@@ -221,11 +221,10 @@ A pranayama preset has:
 - `id`
 - `name`
 - `note`
-- `duration`, where `null` means infinite
-- in-breath seconds
-- first hold seconds
-- out-breath seconds
-- second hold seconds
+- An ordered `segments` list. Each segment contains a duration and the four
+  in-breath, first-hold, out-breath, and second-hold durations. Only the last
+  segment may have an infinite duration. Legacy single-segment presets still
+  decode into the same model.
 
 Default pranayama presets include:
 
@@ -252,8 +251,17 @@ The pranayama guide graph:
 - Does not show a lead-out red dot on the first cycle.
 - Does not show a lead-in red dot before the last finite cycle.
 
-Finite pranayama sessions do not stop mid-cycle. The effective duration is the
-first complete breath-cycle boundary at or after the requested duration.
+Finite pranayama segments do not stop mid-cycle. Each effective segment duration
+is rounded up to its next complete breath-cycle boundary.
+
+Remote control is disabled by default. When enabled, each segment runs until
+explicitly advanced or stopped, ignoring its configured duration. Commands can
+start/stop, multiply/divide breath lengths by 1.1, or select the adjacent segment.
+Changes are queued at cycle boundaries and shown as pending values in the guide.
+These runtime changes do not modify the saved preset. Android supports media
+keys, external touch gestures, and an optional accessibility key-event service;
+the latter does not request access to screen content. Single/double external
+touch gestures are resolved over 500 ms. Hardware support varies by device.
 
 ## Pranayama Audio
 
@@ -263,7 +271,7 @@ There are no required pranayama audio asset files. Earlier generated WAV files
 such as `inhale-tone.wav` and `exhale-tone.wav` are obsolete leftovers if they
 appear untracked in the workspace.
 
-The current implementation generates one full breath-cycle WAV byte buffer:
+The implementation generates WAV buffers containing whole breath cycles:
 
 - Inhale tone.
 - First hold silence.
@@ -275,16 +283,22 @@ Why one full cycle?
 - Separate inhale/exhale clip scheduling caused clipping and phase-boundary
   glitches, especially for no-hold presets.
 - A single generated loop lets fade-in and fade-out be baked into the waveform.
-- The audio player only needs to loop one already-buffered source.
+- Several cycles are packed into each buffered source to reduce scheduling
+  overhead. The scheduler looks ahead 45 seconds, with at most 24 cycles per
+  clip, and never lets a clip cross a timed segment boundary.
 
-Why the small startup delay?
+Audio and graphics use SoLoud's engine clock and scheduled start times, not
+independent Dart timers or platform loop callbacks. Pending changes cancel
+queued old material at a silent cycle boundary before the new material starts.
+Generation counters reject stale asynchronous work after pause/stop/switch.
+Bells share the engine but use separate playback groups, so a meditation bell
+does not cancel a concurrent breathing session. Legacy bell asset paths are
+normalized only for asset loading, not rewritten in saved presets.
 
-- On some backends, the first `play` call resolves before audible playback is
-  fully aligned with the visual clock.
-- The app starts the visual clock only after the audio command completes and a
-  tiny warmup delay has passed.
-- Generation counters make stale async audio startup harmless if the user
-  pauses, stops, or changes presets during startup.
+On Android `NO_XIPH_LIBS=true` excludes optional precompiled SoLoud codecs.
+The MP3/WAV decoders and engine are built from source for F-Droid. Keep the
+SoLoud version at least 4.1.5 when using this flag (earlier versions had an
+incomplete compile guard); 1.0.5 pins a resolved version of 4.1.7.
 
 ## Bells And Sounds
 
@@ -374,6 +388,7 @@ Settings currently includes:
 - Background timer support.
 - Background setup guide link.
 - Recent timer count.
+- Pranayama remote controls, command bindings, and input diagnostics.
 - Presets:
   - Reinstall default presets.
   - Import presets JSON.
@@ -409,6 +424,8 @@ Important keys:
 - `turnScreenOnNearAudio`
 - `timerEntries`
 - `pranayamaEntries`
+- `pranayamaRemoteControlEnabled` (missing means false)
+- `pranayamaRemoteCommandKeys`
 - `meditationLogs`
 
 Persistence decoder strategy:
@@ -466,8 +483,8 @@ Useful tests cover:
 - Use `rg` for code search.
 - Prefer keeping alpha changes small and covered by widget tests.
 - Be careful not to replace the existing `HomeScreen` when ending pushed routes.
-- Be careful with pranayama audio. The generation counters and warmup delay are
-  there because real backends behaved badly without them.
+- Be careful with pranayama audio. Preserve the shared engine clock, generation
+  counters, cancellation of queued material, and silent cycle boundaries.
 - Do not reintroduce separate inhale/exhale audio clips unless there is a very
   strong reason and device testing proves it is stable.
 - Do not assume a single active timer. Meditation and pranayama can overlap.

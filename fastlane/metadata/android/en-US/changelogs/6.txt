@@ -1,0 +1,1 @@
+Optional Bluetooth pranayama controls with configurable buttons, next-cycle changes, and visual feedback. Unified SoLoud audio with synchronized breathing guidance. Added HRV & HPV Breathing preset. Fixed missed one-time bells and inconsistent streak counts. Existing presets, logs, and settings are preserved; remote control is off by default.

@@ -47,8 +47,8 @@ app.*.map.json
 InsightTimerLogs.csv
 breath-and-insight-logs.csv
 
-/fdroiddata/*
-/fdroidserver/*
+/fdroiddata/
+/fdroidserver/
 
 # FVM Version Cache
 .fvm/
