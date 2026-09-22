@@ -60,7 +60,8 @@ The fdroiddata metadata uses `srclibs: flutter@stable`, extracts that pinned
 version during `prebuild`, and then runs `git -C $$flutter$$ checkout -f
 $flutterVersion`. This follows the F-Droid Flutter template.
 
-Version 1.0.5 declares NDK r28c for the native SoLoud engine. The app's
+Version 1.0.5 declares NDK r28c for Flutter and installs r27 in `prebuild` for
+the SoLoud plugin's Android Gradle configuration. The app's
 `android/gradle.properties` disables optional precompiled Xiph codecs with
 `NO_XIPH_LIBS=true`. Keep `.pub-cache` in `scandelete` so unused downloaded
 binaries are removed by the scanner; MP3/WAV support is compiled from source.
@@ -76,3 +77,10 @@ fdroid build -v -t --refresh-scanner --no-tarball com.wordpress.brunoloff.medita
 The recipe retains tag-based autoupdates and the `base * 10 + ABI` version-code
 scheme. Future updates can normally be triggered by a version bump and tag, but
 this native-engine change also adds an NDK requirement to the build recipe.
+
+When using a rootless container as container-root, set
+`ANDROID_HOME=/opt/android-sdk`, `ANDROID_SDK_ROOT=/opt/android-sdk`, and
+`TAR_OPTIONS=--no-same-owner`. The last setting prevents SDK archive extraction
+from trying to restore user IDs outside the container's allowed mapping.
+Preserve any older root-owned build folders separately and use fresh writable
+build folders; do not run the build as host root to work around this.
