@@ -2143,6 +2143,72 @@ void main() {
     expect(playedBells, ['Start', 'Priority', 'End']);
   });
 
+  for (final lateness in [
+    const Duration(microseconds: 1),
+    const Duration(milliseconds: 20),
+    const Duration(milliseconds: 999),
+  ]) {
+    testWidgets('one-time bell fires once with $lateness callback delay', (
+      WidgetTester tester,
+    ) async {
+      final clock = _TestClock();
+      final playedBells = <String>[];
+      await tester.pumpWidget(
+        MaterialApp(
+          home: MeditationSessionScreen(
+            now: clock.now,
+            onBellPlayed: (bell) => playedBells.add(bell.name),
+            timer: const MeditationTimerPreset(
+              id: 'one-time-bell',
+              name: 'One-time bell',
+              duration: Duration(minutes: 15),
+              startingBell: BellSound(
+                name: 'Start',
+                assetPath: 'audio/bells/wood-knock.mp3',
+              ),
+              endingBell: BellSound(
+                name: 'End',
+                assetPath: 'audio/bells/wood-knock.mp3',
+              ),
+              intermediateBells: [
+                IntermediateBell(
+                  startTime: Duration(minutes: 5),
+                  bell: BellSound(
+                    name: 'Once',
+                    assetPath: 'audio/bells/wood-knock.mp3',
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+
+      clock.advance(const Duration(minutes: 4, seconds: 59));
+      await tester.pump(const Duration(seconds: 1));
+      expect(playedBells, ['Start']);
+
+      // Real callbacks do not land exactly on whole seconds.
+      clock.advance(const Duration(seconds: 1) + lateness);
+      await tester.pump(const Duration(seconds: 1));
+      expect(playedBells, ['Start', 'Once']);
+
+      // Rechecking the same second (e.g. on resume) must not replay the bell.
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await tester.pump();
+      expect(playedBells, ['Start', 'Once']);
+
+      clock.advance(const Duration(minutes: 5));
+      await tester.pump(const Duration(seconds: 1));
+      expect(playedBells, ['Start', 'Once']);
+
+      clock.advance(const Duration(minutes: 5));
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pumpAndSettle();
+      expect(playedBells, ['Start', 'Once', 'End']);
+    });
+  }
+
   testWidgets('timer delete button confirms before removing a timer', (
     WidgetTester tester,
   ) async {

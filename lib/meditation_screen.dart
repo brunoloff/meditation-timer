@@ -1377,7 +1377,9 @@ bool _isIntermediateBellDue(IntermediateBell bell, Duration elapsed) {
     return false;
   }
 
-  if (elapsed == bell.startTime) {
+  // Timer callbacks can arrive fractionally late. Match the scheduled second,
+  // as repeating bells do; _tickSession processes each elapsed second once.
+  if (elapsed.inSeconds == bell.startTime.inSeconds) {
     return true;
   }
 
