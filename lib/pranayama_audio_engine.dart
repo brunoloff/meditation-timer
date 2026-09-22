@@ -6,6 +6,42 @@ const _pranayamaAudioMaxQueuedCycles = 24;
 const _pranayamaTonePlaybackVolume = 0.65;
 const _pranayamaTransitionCancelTolerance = Duration(milliseconds: 75);
 
+int _pranayamaAudioChunkCycleCount(
+  PranayamaSegmentPosition position,
+  Duration availableDuration, {
+  required bool manualSegment,
+}) {
+  // A chunk repeats one segment's PCM. It must stop at that segment's rounded
+  // cycle boundary, even when the look-ahead window includes later segments.
+  final segmentDuration = _effectivePranayamaSegmentDuration(position.segment);
+  if (!manualSegment && segmentDuration != null) {
+    final remaining = segmentDuration - position.localElapsed;
+    if (remaining < availableDuration) {
+      availableDuration = remaining;
+    }
+  }
+  final cycleDuration = _pranayamaCycleDurationForSegment(position.segment);
+  return (availableDuration.inMicroseconds ~/
+          math.max(1, cycleDuration.inMicroseconds))
+      .clamp(1, _pranayamaAudioMaxQueuedCycles);
+}
+
+@visibleForTesting
+int pranayamaAudioChunkCycleCountForTesting(
+  PranayamaPreset preset,
+  Duration elapsed,
+  Duration availableDuration, {
+  int? forcedSegmentIndex,
+}) => _pranayamaAudioChunkCycleCount(
+  _pranayamaSegmentAtElapsed(
+    preset,
+    elapsed,
+    forcedSegmentIndex: forcedSegmentIndex,
+  ),
+  availableDuration,
+  manualSegment: forcedSegmentIndex != null,
+);
+
 class _PranayamaAudioEngine {
   final _SoLoudAudioBackend _backend = _SoLoudAudioBackend.instance;
   final Map<String, Future<AudioSource?>> _sourceFutures =

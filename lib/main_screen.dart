@@ -13,6 +13,8 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
+  DateTime _now() => widget.now?.call() ?? DateTime.now();
+
   static const MethodChannel _remoteKeysChannel = MethodChannel(
     'bruno_meditation_timer/remote_keys',
   );
@@ -198,7 +200,7 @@ class _HomeScreenState extends State<HomeScreen> {
       _soundEnabled = enabled;
       if (!enabled && preservePranayamaElapsed) {
         _pranayamaElapsedBeforePause = pranayamaElapsed;
-        _pranayamaStartedAt = DateTime.now();
+        _pranayamaStartedAt = _now();
       }
     });
     if (!enabled) {
@@ -247,7 +249,7 @@ class _HomeScreenState extends State<HomeScreen> {
               _pranayamaSegmentStartForIndex(preset, position.index) +
               position.localElapsed;
         }
-        _pranayamaStartedAt = _isPranayamaPaused ? null : DateTime.now();
+        _pranayamaStartedAt = _isPranayamaPaused ? null : _now();
       }
 
       _pranayamaRemoteControlEnabled = enabled;
@@ -1874,7 +1876,7 @@ class _HomeScreenState extends State<HomeScreen> {
       _activePranayamaPreset = preset;
       _activePranayamaSegmentIndex = nextSegmentIndex;
       _pranayamaElapsedBeforePause = Duration.zero;
-      _pranayamaStartedAt = _isPranayamaPaused ? null : DateTime.now();
+      _pranayamaStartedAt = _isPranayamaPaused ? null : _now();
     });
     if (clockAnchorEngineTime != null) {
       _pranayamaAudioEngine.setClockAnchor(
@@ -1930,7 +1932,7 @@ class _HomeScreenState extends State<HomeScreen> {
     }
 
     setState(() {
-      _pranayamaStartedAt = DateTime.now();
+      _pranayamaStartedAt = _now();
     });
     _notifyPranayamaSession();
     _ensurePranayamaTicker();
@@ -1976,7 +1978,7 @@ class _HomeScreenState extends State<HomeScreen> {
     }
 
     setState(() {
-      _pranayamaStartedAt = DateTime.now();
+      _pranayamaStartedAt = _now();
     });
     _notifyPranayamaSession();
     _ensurePranayamaTicker();
@@ -2179,18 +2181,26 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
 
+    // Timed sessions must use the same timeline before and after the switch.
+    // Forcing segment zero here would queue an endless first segment and make
+    // the normal scheduler add overlapping audio after the transition.
+    final pendingForcedIndex = _pranayamaRemoteControlEnabled
+        ? pendingTransition.segmentIndex
+        : null;
     final pendingTimelineId = _pranayamaAudioTimelineId(
       preset: pendingTransition.preset,
-      forcedSegmentIndex: pendingTransition.segmentIndex,
+      forcedSegmentIndex: pendingForcedIndex,
     );
     await _schedulePranayamaAudioRange(
       preset: pendingTransition.preset,
       timelineId: pendingTimelineId,
-      forcedSegmentIndex: pendingTransition.segmentIndex,
+      forcedSegmentIndex: pendingForcedIndex,
       fromElapsed: Duration.zero,
       untilElapsed: lookAheadEnd - pendingTransition.applyAtElapsed,
       engineTimeForElapsed: (elapsed) => applyAtEngineTime + elapsed,
-      effectiveEnd: null,
+      effectiveEnd: _pranayamaRemoteControlEnabled
+          ? null
+          : _effectivePranayamaDuration(pendingTransition.preset),
       allowCycleBeyondUntilElapsed: true,
       generation: generation,
     );
@@ -2266,11 +2276,11 @@ class _HomeScreenState extends State<HomeScreen> {
       final schedulingWindowEnd = effectiveEnd == null
           ? untilElapsed
           : _minDuration(effectiveEnd, untilElapsed);
-      final availableDuration = schedulingWindowEnd - cursor;
-      var cycleCount =
-          availableDuration.inMicroseconds ~/
-          math.max(1, cycleDuration.inMicroseconds);
-      cycleCount = cycleCount.clamp(1, _pranayamaAudioMaxQueuedCycles).toInt();
+      final cycleCount = _pranayamaAudioChunkCycleCount(
+        segmentPosition,
+        schedulingWindowEnd - cursor,
+        manualSegment: forcedSegmentIndex != null,
+      );
       final playDuration = Duration(
         microseconds: cycleDuration.inMicroseconds * cycleCount,
       );
@@ -2504,7 +2514,7 @@ class _HomeScreenState extends State<HomeScreen> {
     }
 
     return _pranayamaElapsedBeforePause +
-        DateTime.now().difference(_pranayamaStartedAt!);
+        _now().difference(_pranayamaStartedAt!);
   }
 
   void _recordRecentPranayamaPreset(PranayamaPreset preset) {
