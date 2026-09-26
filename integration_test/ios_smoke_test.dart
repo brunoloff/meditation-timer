@@ -15,6 +15,7 @@ import '../test/support/ios_pranayama_fixture.dart';
 // the otherwise-valid silent timer used by ordinary host-side widget tests.
 void main() {
   final binding = IntegrationTestWidgetsFlutterBinding.ensureInitialized();
+  WidgetController.hitTestWarningShouldBeFatal = true;
 
   testWidgets(
     'iOS audio, timer, breathing, logs and settings smoke test',
@@ -120,12 +121,18 @@ void main() {
       await binding.takeScreenshot('05a-pranayama-ready');
       expect(preset, findsOneWidget);
       await tester.ensureVisible(preset);
+      await tester.pump(const Duration(milliseconds: 100));
       await tester.tap(preset);
       await _waitUntil(tester, () => SoLoud.instance.getActiveVoiceCount() > 0);
       expect(SoLoud.instance.getActiveVoiceCount(), greaterThan(0));
-      await tester.ensureVisible(
+      // Off-screen sliver headers are excluded from the widget finder. Scroll
+      // back like a user would instead of requiring the header to exist first.
+      await tester.scrollUntilVisible(
         find.byKey(const ValueKey('pranayama-tab-button')),
+        -300,
+        scrollable: find.byType(Scrollable).first,
       );
+      await tester.pump(const Duration(milliseconds: 200));
       await binding.takeScreenshot('05-pranayama');
       await tester.tap(find.byKey(const ValueKey('timers-tab-button')));
       await tester.pump(const Duration(seconds: 1));

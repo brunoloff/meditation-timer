@@ -28,6 +28,9 @@ void main() {
   setUp(() {
     SharedPreferencesAsyncPlatform.instance =
         InMemorySharedPreferencesAsync.empty();
+    final previous = WidgetController.hitTestWarningShouldBeFatal;
+    WidgetController.hitTestWarningShouldBeFatal = true;
+    addTearDown(() => WidgetController.hitTestWarningShouldBeFatal = previous);
   });
 
   testWidgets(
@@ -83,10 +86,29 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const ValueKey('pranayama-tab-button')));
       await tester.pumpAndSettle();
+      final preset = find.byKey(
+        const ValueKey('pranayama-iOS breathing test-root'),
+      );
+      expect(preset, findsOneWidget);
+      await tester.ensureVisible(preset);
+      await tester.pump(const Duration(milliseconds: 100));
+      await tester.tap(preset);
+      await tester.pump(const Duration(milliseconds: 100));
+      await tester.scrollUntilVisible(
+        find.byKey(const ValueKey('pranayama-tab-button')),
+        -300,
+        scrollable: find.byType(Scrollable).first,
+      );
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.tap(find.byKey(const ValueKey('timers-tab-button')));
+      await tester.pump();
+      await tester.tap(find.byKey(const ValueKey('pranayama-tab-button')));
+      await tester.pump();
       expect(
-        find.byKey(const ValueKey('pranayama-iOS breathing test-root')),
+        find.byKey(const ValueKey('toggle-pranayama-button')),
         findsOneWidget,
       );
+      expect(find.text('Ready'), findsNothing);
     },
     variant: TargetPlatformVariant({TargetPlatform.iOS}),
   );
