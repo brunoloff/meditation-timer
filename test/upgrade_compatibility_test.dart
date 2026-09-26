@@ -83,6 +83,33 @@ void main() {
     );
   });
 
+  test(
+    'resumed audio reaches exact boundaries at sub-millisecond precision',
+    () {
+      // The second segment starts at 12s and has 6s cycles. A native audio clock
+      // can report any microsecond offset, not only whole milliseconds.
+      for (var microseconds = 1; microseconds < 1000; microseconds++) {
+        final elapsed = Duration(seconds: 16, microseconds: microseconds);
+        final boundary =
+            elapsed +
+            pranayamaAudioCycleRemainingForTesting(_segmentedPreset, elapsed);
+        expect(boundary, const Duration(seconds: 18));
+        expect(
+          boundary + const Duration(seconds: 6),
+          const Duration(seconds: 24),
+          reason: 'The final cycle must fit exactly in the segment.',
+        );
+      }
+      expect(
+        pranayamaAudioCycleRemainingForTesting(
+          _segmentedPreset,
+          const Duration(seconds: 18),
+        ),
+        const Duration(seconds: 6),
+      );
+    },
+  );
+
   testWidgets('upgrade preserves saved data and keeps remote control opt-in', (
     tester,
   ) async {

@@ -148,6 +148,14 @@ void main() {
       // a delayed voice. A mid-cycle resume can be silent until the next cycle.
       await _waitUntil(tester, () => SoLoud.instance.getActiveVoiceCount() > 0);
       expect(SoLoud.instance.getActiveVoiceCount(), greaterThan(0));
+      // Pause once more inside the final cycle. No full cycle remains to queue
+      // on resume, but the silent remainder must still finish, not freeze with
+      // SoLoud's idle output clock.
+      await tester.pump(const Duration(seconds: 3));
+      await tester.tap(find.byKey(const ValueKey('toggle-pranayama-button')));
+      await tester.pump(const Duration(milliseconds: 500));
+      expect(SoLoud.instance.getActiveVoiceCount(), 0);
+      await tester.tap(find.byKey(const ValueKey('toggle-pranayama-button')));
       await _waitUntil(
         tester,
         () =>

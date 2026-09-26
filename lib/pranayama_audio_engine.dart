@@ -6,6 +6,25 @@ const _pranayamaAudioMaxQueuedCycles = 24;
 const _pranayamaTonePlaybackVolume = 0.65;
 const _pranayamaTransitionCancelTolerance = Duration(milliseconds: 75);
 
+Duration _pranayamaAudioCycleRemaining(PranayamaSegmentPosition position) {
+  final cycle = _pranayamaCycleDurationForSegment(position.segment);
+  // Keep the native clock's precision. Truncating the remainder to milliseconds
+  // leaves a fractional offset on the next boundary, so the final full cycle
+  // appears to exceed the segment duration and is never scheduled.
+  final cycleMicroseconds = math.max(1, cycle.inMicroseconds);
+  return Duration(
+    microseconds:
+        cycleMicroseconds -
+        position.localElapsed.inMicroseconds % cycleMicroseconds,
+  );
+}
+
+@visibleForTesting
+Duration pranayamaAudioCycleRemainingForTesting(
+  PranayamaPreset preset,
+  Duration elapsed,
+) => _pranayamaAudioCycleRemaining(_pranayamaSegmentAtElapsed(preset, elapsed));
+
 int _pranayamaAudioChunkCycleCount(
   PranayamaSegmentPosition position,
   Duration availableDuration, {

@@ -25,6 +25,13 @@ checks resumption at the next boundary, not instantaneous mid-tone resumption.
 This behavior is shared with the other platforms and merits a separate audio
 follow-up if seamless pause/resume is required.
 
+Native validation also exposed a precision bug in the shared scheduler: dropping
+microseconds from the next cycle boundary could prevent a resumed final cycle
+from fitting within its segment. Boundaries now retain microsecond precision.
+When no full cycle remains to schedule, elapsed time falls back to the wall clock
+instead of freezing with SoLoud's idle output clock. Regression tests cover the
+boundary arithmetic and the simulator test exercises both resume cases.
+
 Artifacts include the unsigned device app, a simulator app, screenshots, the
 resolved CocoaPods lockfile, and integration test output. Artifacts expire after
 14 days; download any needed for long-term comparison.

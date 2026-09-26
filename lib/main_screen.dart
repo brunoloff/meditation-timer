@@ -1837,12 +1837,7 @@ class _HomeScreenState extends State<HomeScreen> {
           ? _activePranayamaSegmentIndex
           : null,
     );
-    final cycleDuration = _pranayamaCycleDurationForSegment(position.segment);
-    final cycleMilliseconds = math.max(1, cycleDuration.inMilliseconds);
-    final elapsedInCycle =
-        position.localElapsed.inMilliseconds % cycleMilliseconds;
-    final remainingMilliseconds = cycleMilliseconds - elapsedInCycle;
-    return Duration(milliseconds: remainingMilliseconds);
+    return _pranayamaAudioCycleRemaining(position);
   }
 
   void _applyPendingPranayamaTransition({bool restartAudio = true}) {
@@ -2143,6 +2138,17 @@ class _HomeScreenState extends State<HomeScreen> {
       currentElapsed: currentElapsed,
       generation: generation,
     );
+    if (generation == _pranayamaAudioGeneration &&
+        _scheduledPranayamaAudioCycles.isEmpty &&
+        _pranayamaAudioEngine.hasClockAnchor) {
+      // SoLoud's clock stops when the output device has no voices to mix. A
+      // resume within the final cycle intentionally has no full cycle left to
+      // queue; finish that silent remainder on the wall clock, not a frozen
+      // audio clock. The same fallback covers a failed native scheduling call.
+      _pranayamaElapsedBeforePause = currentElapsed;
+      _pranayamaStartedAt = _now();
+      _pranayamaAudioEngine.releaseClockAnchor();
+    }
   }
 
   Future<void> _schedulePranayamaAudioAhead({
@@ -2262,13 +2268,8 @@ class _HomeScreenState extends State<HomeScreen> {
       if (cycleDuration <= Duration.zero) {
         break;
       }
-      final cycleMilliseconds = math.max(1, cycleDuration.inMilliseconds);
-      final elapsedInCycle = Duration(
-        milliseconds:
-            segmentPosition.localElapsed.inMilliseconds % cycleMilliseconds,
-      );
-      final cycleRemaining = cycleDuration - elapsedInCycle;
-      if (elapsedInCycle > Duration.zero) {
+      final cycleRemaining = _pranayamaAudioCycleRemaining(segmentPosition);
+      if (cycleRemaining < cycleDuration) {
         final nextCycleBoundary = cursor + cycleRemaining;
         if ((effectiveEnd != null && nextCycleBoundary > effectiveEnd) ||
             (!allowCycleBeyondUntilElapsed &&
