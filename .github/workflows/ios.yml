@@ -63,6 +63,7 @@ jobs:
           xcrun simctl bootstatus "$DEVICE" -b
           echo "device=$DEVICE" >> "$GITHUB_OUTPUT"
       - name: Exercise real iOS plugins and app flows
+        timeout-minutes: 25
         run: |
           set -o pipefail
           flutter drive --no-pub --dart-define=DISPOSABLE_TEST_DEVICE=true --driver=test_driver/integration_test.dart --target=integration_test/ios_smoke_test.dart -d '${{ steps.simulator.outputs.device }}' 2>&1 | tee artifacts/ios-integration.log

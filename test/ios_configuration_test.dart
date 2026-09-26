@@ -1,8 +1,14 @@
+import 'dart:convert';
+
 import 'package:breath_and_insight_timer/main.dart';
 import 'package:file_selector_platform_interface/file_selector_platform_interface.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:shared_preferences_platform_interface/in_memory_shared_preferences_async.dart';
+import 'package:shared_preferences_platform_interface/shared_preferences_async_platform_interface.dart';
+
+import 'support/ios_pranayama_fixture.dart';
 
 class _CapturingFileSelector extends FileSelectorPlatform {
   List<XTypeGroup>? types;
@@ -19,6 +25,11 @@ class _CapturingFileSelector extends FileSelectorPlatform {
 }
 
 void main() {
+  setUp(() {
+    SharedPreferencesAsyncPlatform.instance =
+        InMemorySharedPreferencesAsync.empty();
+  });
+
   testWidgets(
     'home tabs fit a narrow iPhone without splitting their labels',
     (tester) async {
@@ -43,7 +54,10 @@ void main() {
   testWidgets(
     'iPhone back control keeps the meditation available',
     (tester) async {
-      SharedPreferences.setMockInitialValues({'soundEnabled': false});
+      SharedPreferences.setMockInitialValues({
+        'soundEnabled': false,
+        'pranayamaEntries': jsonEncode(iosPranayamaEntries),
+      });
       await tester.pumpWidget(const BreathAndInsightTimerApp());
       await tester.pumpAndSettle();
       await tester.tap(
@@ -59,6 +73,20 @@ void main() {
       await tester.tap(card);
       await tester.pump();
       expect(find.byTooltip('Pause'), findsOneWidget);
+      await tester.tap(find.byTooltip('Pause'));
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(const ValueKey('finish-without-bell-button')),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('summary-continue-button')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('pranayama-tab-button')));
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const ValueKey('pranayama-iOS breathing test-root')),
+        findsOneWidget,
+      );
     },
     variant: TargetPlatformVariant({TargetPlatform.iOS}),
   );
