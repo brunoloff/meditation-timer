@@ -18,6 +18,13 @@ tabs, natural completion, stats, and saved preferences. Native SoLoud voice and
 engine-clock checks detect silent fallback after initialization failures. These
 checks do not measure sound quality or acoustic synchronization.
 
+The existing breathing scheduler queues whole cycles only. After a mid-cycle
+pause/resume it can remain silent until the next cycle boundary; if paused in
+the final cycle, there may be no further tone before completion. The native test
+checks resumption at the next boundary, not instantaneous mid-tone resumption.
+This behavior is shared with the other platforms and merits a separate audio
+follow-up if seamless pause/resume is required.
+
 Artifacts include the unsigned device app, a simulator app, screenshots, the
 resolved CocoaPods lockfile, and integration test output. Artifacts expire after
 14 days; download any needed for long-term comparison.

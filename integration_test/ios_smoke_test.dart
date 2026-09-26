@@ -144,9 +144,16 @@ void main() {
       await tester.pump(const Duration(milliseconds: 500));
       expect(SoLoud.instance.getActiveVoiceCount(), 0);
       await tester.tap(find.byKey(const ValueKey('toggle-pranayama-button')));
-      await tester.pump(const Duration(seconds: 1));
+      // The existing scheduler skips partial cycles rather than seeking into
+      // a delayed voice. A mid-cycle resume can be silent until the next cycle.
+      await _waitUntil(tester, () => SoLoud.instance.getActiveVoiceCount() > 0);
       expect(SoLoud.instance.getActiveVoiceCount(), greaterThan(0));
-      await _waitUntil(tester, () => find.text('Ready').evaluate().isNotEmpty);
+      await _waitUntil(
+        tester,
+        () =>
+            find.text('Ready').evaluate().isNotEmpty &&
+            SoLoud.instance.getActiveVoiceCount() == 0,
+      );
       expect(find.text('Ready'), findsOneWidget);
       expect(SoLoud.instance.getActiveVoiceCount(), 0);
 
