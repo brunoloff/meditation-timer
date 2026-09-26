@@ -1,0 +1,83 @@
+name: iOS validation
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [codex/ios-validation]
+  pull_request:
+    paths:
+      - 'lib/**'
+      - 'ios/**'
+      - 'assets/**'
+      - 'test/**'
+      - 'integration_test/**'
+      - 'test_driver/**'
+      - 'pubspec.*'
+      - '.fvmrc'
+      - '.github/workflows/ios.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Install the repository's pinned Flutter SDK
+        run: |
+          VERSION=$(ruby -rjson -e 'puts JSON.parse(File.read(".fvmrc")).fetch("flutter")')
+          git clone --depth 1 --branch "$VERSION" https://github.com/flutter/flutter.git "$RUNNER_TEMP/flutter"
+          echo "$RUNNER_TEMP/flutter/bin" >> "$GITHUB_PATH"
+          xcodebuild -version
+          pod --version
+          cmake --version
+      - name: Resolve locked dependencies
+        run: |
+          flutter config --no-analytics --no-enable-swift-package-manager
+          flutter pub get --enforce-lockfile
+      - name: Analyze and run regression tests
+        run: |
+          flutter analyze --no-pub
+          flutter test --no-pub
+      - name: Build unsigned iPhone release
+        run: |
+          flutter build ios --release --no-codesign --no-pub
+          mkdir -p artifacts
+          ditto -c -k --keepParent build/ios/iphoneos/Runner.app artifacts/ios-unsigned-device-app.zip
+          cp ios/Podfile.lock artifacts/Podfile.lock
+      - name: Boot iPhone simulator
+        id: simulator
+        run: |
+          DEVICE=$(xcrun simctl list devices available --json | ruby -rjson -e '
+            devices = JSON.parse(STDIN.read).fetch("devices").values.flatten
+            phone = devices.find { |d| d.fetch("name").start_with?("iPhone") }
+            abort "No iPhone simulator installed" unless phone
+            puts phone.fetch("udid")')
+          xcrun simctl boot "$DEVICE"
+          xcrun simctl bootstatus "$DEVICE" -b
+          echo "device=$DEVICE" >> "$GITHUB_OUTPUT"
+      - name: Exercise real iOS plugins and app flows
+        run: |
+          set -o pipefail
+          flutter drive --no-pub --driver=test_driver/integration_test.dart --target=integration_test/ios_smoke_test.dart -d '${{ steps.simulator.outputs.device }}' 2>&1 | tee artifacts/ios-integration.log
+      - name: Build ordinary simulator app
+        run: |
+          flutter build ios --simulator --debug --no-codesign --no-pub
+          ditto -c -k --keepParent build/ios/iphonesimulator/Runner.app artifacts/ios-simulator-app.zip
+      - name: Capture simulator on failure
+        if: failure() && steps.simulator.outputs.device != ''
+        run: xcrun simctl io '${{ steps.simulator.outputs.device }}' screenshot artifacts/failure.png
+      - name: Save builds, screenshots, and test results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ios-validation-${{ github.sha }}
+          path: artifacts/
+          retention-days: 14
+          if-no-files-found: warn

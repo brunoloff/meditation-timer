@@ -34,6 +34,18 @@ class _SoLoudAudioBackend {
   }
 
   Future<bool> ensureReady() async {
+    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.iOS) {
+      try {
+        await const MethodChannel(
+          'bruno_meditation_timer/audio_session',
+        ).invokeMethod<void>('activatePlayback');
+      } on Object catch (error) {
+        // Session activation may temporarily fail during a phone call. Allow a
+        // later playback request to retry instead of disabling audio forever.
+        debugPrint('Could not activate iOS playback: $error');
+        return false;
+      }
+    }
     final player = playerOrNull;
     if (player == null) {
       return false;
@@ -81,6 +93,9 @@ class _BellAudioEngine {
     String? group,
     bool replaceGroup = false,
   }) async {
+    if (!await _backend.ensureReady()) {
+      return null;
+    }
     if (replaceGroup && group != null) {
       await stopGroup(group);
     }

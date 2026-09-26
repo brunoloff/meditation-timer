@@ -647,7 +647,13 @@ class _HomeScreenState extends State<HomeScreen> {
     try {
       final file = await openFile(
         acceptedTypeGroups: const <XTypeGroup>[
-          XTypeGroup(label: 'CSV', extensions: <String>['csv']),
+          XTypeGroup(
+            label: 'CSV',
+            extensions: <String>['csv'],
+            uniformTypeIdentifiers: <String>[
+              'public.comma-separated-values-text',
+            ],
+          ),
         ],
       );
       if (file == null) {
@@ -722,7 +728,11 @@ class _HomeScreenState extends State<HomeScreen> {
     try {
       final file = await openFile(
         acceptedTypeGroups: const <XTypeGroup>[
-          XTypeGroup(label: 'JSON', extensions: <String>['json']),
+          XTypeGroup(
+            label: 'JSON',
+            extensions: <String>['json'],
+            uniformTypeIdentifiers: <String>['public.json'],
+          ),
         ],
       );
       if (file == null) {
