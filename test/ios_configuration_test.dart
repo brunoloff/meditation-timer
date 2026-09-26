@@ -1,6 +1,5 @@
 import 'package:breath_and_insight_timer/main.dart';
 import 'package:file_selector_platform_interface/file_selector_platform_interface.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -20,6 +19,27 @@ class _CapturingFileSelector extends FileSelectorPlatform {
 }
 
 void main() {
+  testWidgets(
+    'home tabs fit a narrow iPhone without splitting their labels',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(375, 812));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      SharedPreferences.setMockInitialValues({});
+      await tester.pumpWidget(const BreathAndInsightTimerApp());
+      await tester.pumpAndSettle();
+      for (final label in ['Timers', 'Pranayama', 'Stats']) {
+        final text = tester.widget<Text>(find.text(label).first);
+        expect(text.maxLines, 1);
+        expect(text.softWrap, isFalse);
+      }
+      await tester.tap(find.byKey(const ValueKey('pranayama-tab-button')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('pranayama-tab')), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+    variant: TargetPlatformVariant({TargetPlatform.iOS}),
+  );
+
   testWidgets(
     'iPhone back control keeps the meditation available',
     (tester) async {

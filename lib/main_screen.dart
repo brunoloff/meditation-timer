@@ -3321,6 +3321,7 @@ class _HomeTabBar extends StatelessWidget {
       children: [
         for (final tab in [HomeTab.timers, HomeTab.pranayama, HomeTab.stats])
           Expanded(
+            flex: tab == HomeTab.pranayama ? 3 : 2,
             child: _HomeTextTabButton(
               tab: tab,
               isSelected: tab == selectedTab,
@@ -3365,7 +3366,10 @@ class _HomeTextTabButton extends StatelessWidget {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Text(tab.label),
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Text(tab.label, maxLines: 1, softWrap: false),
+          ),
           const SizedBox(height: 10),
           AnimatedContainer(
             duration: const Duration(milliseconds: 160),
