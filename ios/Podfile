@@ -1,4 +1,4 @@
-platform :ios, '13.0'
+platform :ios, '14.0'
 
 # Only MP3 bells and generated WAV tones are used. Build SoLoud from source
 # without its optional precompiled Xiph codec libraries, as on Android.

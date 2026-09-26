@@ -2066,6 +2066,11 @@ class _HomeScreenState extends State<HomeScreen> {
       return false;
     }
 
+    // Activation is a playback/resume operation, not a per-frame operation.
+    // Reconfiguring AVAudioSession on each scheduling tick can disturb audio.
+    if (!await _pranayamaAudioEngine.activatePlayback()) {
+      return false;
+    }
     await _syncPranayamaAudio(forceRestart: true);
     return _pranayamaAudioEngine.hasClockAnchor;
   }

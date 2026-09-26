@@ -17,6 +17,12 @@ presets, sound selections, logs, and preferences are preserved on upgrade.
 See [CHANGELOG.md](CHANGELOG.md) for release notes and
 [PROJECT_REFERENCE.md](PROJECT_REFERENCE.md) for architecture and behavior.
 
+## iOS Preparation
+
+The macOS GitHub Actions workflow builds an unsigned iPhone app and runs simulator
+integration tests. See [IOS_TESTING.md](IOS_TESTING.md) for reproducing the checks,
+artifact details, signing requirements, and the remaining real-device limitations.
+
 ## License
 
 The app source code is licensed under the GNU General Public License version 3.

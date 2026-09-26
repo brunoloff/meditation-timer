@@ -33,7 +33,7 @@ class _SoLoudAudioBackend {
     }
   }
 
-  Future<bool> ensureReady() async {
+  Future<bool> activatePlayback() async {
     if (!kIsWeb && defaultTargetPlatform == TargetPlatform.iOS) {
       try {
         await const MethodChannel(
@@ -46,6 +46,10 @@ class _SoLoudAudioBackend {
         return false;
       }
     }
+    return true;
+  }
+
+  Future<bool> ensureReady() async {
     final player = playerOrNull;
     if (player == null) {
       return false;
@@ -60,6 +64,9 @@ class _SoLoudAudioBackend {
 
   Future<bool> _initialize(SoLoud player) async {
     try {
+      if (!await activatePlayback()) {
+        return false;
+      }
       await player.init(
         sampleRate: _soloudOutputSampleRate,
         bufferSize: _soloudOutputBufferSize,
@@ -93,7 +100,7 @@ class _BellAudioEngine {
     String? group,
     bool replaceGroup = false,
   }) async {
-    if (!await _backend.ensureReady()) {
+    if (!await _backend.ensureReady() || !await _backend.activatePlayback()) {
       return null;
     }
     if (replaceGroup && group != null) {

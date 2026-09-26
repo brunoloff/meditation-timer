@@ -60,6 +60,8 @@ class _PranayamaAudioEngine {
 
   Future<bool> ensureReady() => _backend.ensureReady();
 
+  Future<bool> activatePlayback() => _backend.activatePlayback();
+
   Duration? get currentElapsed {
     if (!hasClockAnchor) {
       return null;
