@@ -44,7 +44,8 @@ For simulator tests, create a **disposable** simulator and obtain its ID with
 against an installation containing personal data.
 
 ```sh
-flutter drive --no-pub --driver=test_driver/integration_test.dart \
+flutter drive --no-pub --dart-define=DISPOSABLE_TEST_DEVICE=true \
+  --driver=test_driver/integration_test.dart \
   --target=integration_test/ios_smoke_test.dart -d SIMULATOR_ID
 ```
 
@@ -66,6 +67,8 @@ flutter run -d SIMULATOR_ID
 - File import filters supply Apple's uniform type identifiers as well as the
   extensions used by other platforms.
 - Android background permission and accessibility setup links are hidden on iOS.
+  Meditation has an explicit back button on iOS to minimize a running session,
+  since iPhones do not have Android's system Back button.
 - The existing iOS bundle identifier is
   `com.breathandinsight.breathAndInsightTimer`. A publisher must register an
   appropriate identifier and select their signing team before device distribution.

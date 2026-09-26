@@ -592,6 +592,19 @@ class _MeditationSessionScreenState extends State<MeditationSessionScreen>
                 ),
               ),
             ),
+            if (defaultTargetPlatform == TargetPlatform.iOS &&
+                widget.onMinimizeRequested != null)
+              Positioned(
+                top: 8,
+                left: 8,
+                child: IconButton(
+                  key: const ValueKey('minimize-meditation-button'),
+                  tooltip: 'Back to home',
+                  onPressed: widget.onMinimizeRequested,
+                  icon: const Icon(Icons.chevron_left_rounded),
+                  color: Colors.white,
+                ),
+              ),
             _MeditationPranayamaActionButton(
               listenable: widget.pranayamaSessionListenable,
               canSelect: widget.onStartPranayamaPreset != null,

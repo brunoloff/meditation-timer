@@ -21,6 +21,29 @@ class _CapturingFileSelector extends FileSelectorPlatform {
 
 void main() {
   testWidgets(
+    'iPhone back control keeps the meditation available',
+    (tester) async {
+      SharedPreferences.setMockInitialValues({'soundEnabled': false});
+      await tester.pumpWidget(const BreathAndInsightTimerApp());
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(const ValueKey('timer-Quick 20 minutes-root')),
+      );
+      await tester.pump();
+      await tester.tap(
+        find.byKey(const ValueKey('minimize-meditation-button')),
+      );
+      await tester.pump(const Duration(seconds: 1));
+      final card = find.byKey(const ValueKey('active-meditation-session-card'));
+      expect(card, findsOneWidget);
+      await tester.tap(card);
+      await tester.pump();
+      expect(find.byTooltip('Pause'), findsOneWidget);
+    },
+    variant: TargetPlatformVariant({TargetPlatform.iOS}),
+  );
+
+  testWidgets(
     'iOS settings hide Android setup and use Apple file types',
     (tester) async {
       final originalSelector = FileSelectorPlatform.instance;

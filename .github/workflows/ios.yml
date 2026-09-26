@@ -65,7 +65,7 @@ jobs:
       - name: Exercise real iOS plugins and app flows
         run: |
           set -o pipefail
-          flutter drive --no-pub --driver=test_driver/integration_test.dart --target=integration_test/ios_smoke_test.dart -d '${{ steps.simulator.outputs.device }}' 2>&1 | tee artifacts/ios-integration.log
+          flutter drive --no-pub --dart-define=DISPOSABLE_TEST_DEVICE=true --driver=test_driver/integration_test.dart --target=integration_test/ios_smoke_test.dart -d '${{ steps.simulator.outputs.device }}' 2>&1 | tee artifacts/ios-integration.log
       - name: Build ordinary simulator app
         run: |
           flutter build ios --simulator --debug --no-codesign --no-pub
